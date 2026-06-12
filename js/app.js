@@ -6,7 +6,8 @@ import { createParticleStudio, THREE } from './engine.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { createClient } from '@supabase/supabase-js';
 
-// ---- Library backend (Supabase, single shared library — no auth) ----
+// ---- Backend (Supabase): model files in public storage (for embeds); the
+//      Library list itself is LOCAL to this browser, never shared — see below. ----
 const SUPABASE_URL = 'https://REDACTED_PROJECT_REF.supabase.co';
 const SUPABASE_KEY = 'REDACTED_SUPABASE_KEY';
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -52,6 +53,8 @@ let hoverIntensity = 1.0;
 const stage = document.getElementById('stage');
 const dropzone = document.getElementById('dropzone');
 const panel = document.getElementById('panel');
+const panelToggle = document.getElementById('panelToggle');
+const panelHeader = document.getElementById('panelHeader');
 const reloadPill = document.getElementById('reloadBtn');
 const fileInput = document.getElementById('fileInput');
 const countSlider = document.getElementById('countSlider');
@@ -382,7 +385,7 @@ document.getElementById('embedBtn').addEventListener('click', async () => {
     };
     const id = shortId();
     const { error } = await supabase.from('scenes').insert({
-      id, model_id: currentModel.id, file_path: currentModel.file_path,
+      id, model_id: null, file_path: currentModel.file_path,
       name: loadedFile?.name || null, config,
     });
     if (error) throw error;
@@ -403,6 +406,31 @@ const dzHistoryWrap = document.getElementById('dzHistoryWrap');
 const dzHistory = document.getElementById('dzHistory');
 
 let libraryRows = [];
+
+// ---- Local library store (per-browser, never shared) ----
+// The model FILE still lives in public storage (embeds need it), but the LIST of
+// what you uploaded is kept only in this browser, so no other device can see it.
+const LIBRARY_KEY = 'particleStudio_library';
+function loadLibrary() {
+  try { const v = JSON.parse(localStorage.getItem(LIBRARY_KEY)); return Array.isArray(v) ? v : []; }
+  catch { return []; }
+}
+function saveLibrary(rows) {
+  try { localStorage.setItem(LIBRARY_KEY, JSON.stringify(rows)); } catch (e) { console.warn(e); }
+}
+
+// Downscale a JPEG blob to a small (~256px) data URL so thumbs fit in localStorage.
+async function blobToThumbDataURL(blob, side = 256) {
+  try {
+    const bmp = await createImageBitmap(blob);
+    const c = document.createElement('canvas'); c.width = c.height = side;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, side, side);
+    ctx.drawImage(bmp, 0, 0, side, side);
+    bmp.close?.();
+    return c.toDataURL('image/jpeg', 0.7);
+  } catch { return null; }
+}
 
 function mimeForName(name) {
   return name.toLowerCase().endsWith('.gltf') ? 'model/gltf+json' : 'model/gltf-binary';
@@ -429,11 +457,11 @@ function publicUrl(path) {
 async function saveToLibrary(file) {
   try {
     setStatus('Loaded · saving to library…');
-    const { data: existing, error: qErr } = await supabase.from('models')
-      .select('id, file_path').eq('name', file.name).eq('size_bytes', file.size).limit(1);
-    if (qErr) throw qErr;
-    if (existing.length) {
-      currentModel = { id: existing[0].id, file_path: existing[0].file_path };
+    // Dedup against THIS browser's local library (name + size).
+    const rows = loadLibrary();
+    const dup = rows.find(r => r.name === file.name && r.size_bytes === file.size);
+    if (dup) {
+      currentModel = { id: dup.id, file_path: dup.file_path };
       setStatus('Loaded · already in library'); return;
     }
 
@@ -443,22 +471,17 @@ async function saveToLibrary(file) {
       .upload(filePath, file, { contentType: mimeForName(file.name), cacheControl: '31536000' });
     if (upErr) throw upErr;
 
-    // let the spin settle into a representative frame before snapshotting
+    // let the spin settle into a representative frame, then keep the thumb LOCAL
     await new Promise(r => setTimeout(r, 600));
-    let thumbPath = null;
+    let thumb = null;
     if (loadedFile === file && studio) {   // skip thumb if another model superseded this one
       const blob = await studio.snapshotJPEG(512);
-      if (blob) {
-        thumbPath = `thumbs/${id}.jpg`;
-        const { error: tErr } = await supabase.storage.from('models')
-          .upload(thumbPath, blob, { contentType: 'image/jpeg', cacheControl: '31536000' });
-        if (tErr) thumbPath = null;
-      }
+      if (blob) thumb = await blobToThumbDataURL(blob);
     }
 
-    const { error: insErr } = await supabase.from('models')
-      .insert({ id, name: file.name, file_path: filePath, thumb_path: thumbPath, size_bytes: file.size });
-    if (insErr) throw insErr;
+    rows.unshift({ id, name: file.name, file_path: filePath, thumb, size_bytes: file.size,
+                   created_at: new Date().toISOString() });
+    saveLibrary(rows);
 
     currentModel = { id, file_path: filePath };
     setStatus('Loaded · saved to library');
@@ -491,24 +514,19 @@ async function deleteFromLibrary(row, btn) {
     setTimeout(() => { btn.classList.remove('confirm'); btn.textContent = '×'; }, 2500);
     return;
   }
-  try {
-    const paths = [row.file_path];
-    if (row.thumb_path) paths.push(row.thumb_path);
-    await supabase.storage.from('models').remove(paths);
-    const { error } = await supabase.from('models').delete().eq('id', row.id);
-    if (error) throw error;
-    refreshHistory();
-  } catch (err) {
-    console.error(err);
-    setStatus('Delete failed.');
-  }
+  // Remove from this browser's library. The storage file is intentionally NOT
+  // deleted: anon delete would require a storage SELECT policy, which would also
+  // expose file listing. The orphaned file stays unlisted + unguessable (and any
+  // embed you already shared keeps working).
+  saveLibrary(loadLibrary().filter(r => r.id !== row.id));
+  refreshHistory();
 }
 
 function makeCard(row) {
   const el = document.createElement('div');
   el.className = 'hcard';
-  const thumb = row.thumb_path
-    ? `<img src="${publicUrl(row.thumb_path)}" alt="" loading="lazy">`
+  const thumb = row.thumb
+    ? `<img src="${row.thumb}" alt="" loading="lazy">`
     : `<div class="hthumb-empty">no preview</div>`;
   el.innerHTML = `${thumb}
     <div class="hmeta">
@@ -534,18 +552,18 @@ function renderHistory() {
   libraryRows.slice(0, 4).forEach(row => dzHistory.appendChild(makeCard(row)));
 }
 
-async function refreshHistory() {
-  try {
-    const { data, error } = await supabase.from('models')
-      .select('*').order('created_at', { ascending: false });
-    if (error) throw error;
-    libraryRows = data || [];
-    renderHistory();
-  } catch (err) {
-    console.error(err);
-    historyList.innerHTML = '<p class="hempty">Couldn’t reach library.</p>';
-  }
+function refreshHistory() {
+  libraryRows = loadLibrary();   // local to this browser; already newest-first
+  renderHistory();
 }
+
+// Mobile: tapping the panel header (title or chevron) collapses/expands the
+// controls drawer. On desktop the chevron is hidden and .expanded is a no-op,
+// so the header click does nothing visible.
+panelHeader.addEventListener('click', () => {
+  const expanded = panel.classList.toggle('expanded');
+  panelToggle.setAttribute('aria-expanded', String(expanded));
+});
 
 historyBtn.addEventListener('click', () => historyPanel.classList.toggle('visible'));
 refreshHistory();

@@ -10,8 +10,9 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 upload() {
   local src="$1" dest="$2" ctype="$3"
   echo "→ $dest"
-  # anon RLS allows INSERT + DELETE but not UPDATE, so delete any existing object
-  # first, then POST a fresh one (upsert/UPDATE would 403).
+  # anon RLS is scoped to the embed/ prefix (SELECT+INSERT+UPDATE+DELETE); user
+  # uploads under files/ are unlistable. Delete any existing object first, then
+  # POST fresh (avoids needing the upsert header).
   curl -sS -X DELETE \
     "$SUPABASE_URL/storage/v1/object/models/$dest" \
     -H "Authorization: Bearer $KEY" -H "apikey: $KEY" >/dev/null
