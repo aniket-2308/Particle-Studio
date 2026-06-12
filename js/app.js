@@ -448,7 +448,7 @@ function fmtAge(iso) {
   return new Date(iso).toLocaleDateString();
 }
 function escapeHtml(s) {
-  return s.replace(/[<>&]/g, ch => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[ch]));
+  return s.replace(/[<>&"']/g, ch => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[ch]));
 }
 function publicUrl(path) {
   return supabase.storage.from('models').getPublicUrl(path).data.publicUrl;
