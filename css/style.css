@@ -46,6 +46,14 @@ canvas { display: block; }
 }
 #panel.visible { opacity: 1; pointer-events: auto; }
 #panel h2 { font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-smoke); margin-bottom: 18px; }
+.panel-header { display: contents; }
+.panel-toggle {
+  display: none; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 50%; flex: none;
+  border: 1px solid rgba(255,255,255,0.15); background: transparent; color: var(--color-smoke);
+  cursor: pointer; transition: transform .25s ease, border-color .2s ease, color .2s ease;
+}
+.panel-toggle:hover { color: var(--color-bone); border-color: rgba(255,255,255,0.3); }
 .row { margin-bottom: 18px; }
 .row label { display: flex; justify-content: space-between; font-size: 12px; letter-spacing: 0.021em; color: var(--color-bone); margin-bottom: 8px; }
 .row label span { color: var(--color-plum-voltage); }
@@ -192,3 +200,60 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border: none; b
 #toast.visible { opacity: 1; transform: none; pointer-events: auto; }
 
 input[type=file] { display: none; }
+
+/* ---- Mobile ---- */
+@media (max-width: 640px) {
+  /* Dropzone copy shrinks to fit small screens */
+  .dz-headline { font-size: 28px; max-width: 100%; }
+  .dz-body { font-size: 13px; max-width: 32ch; }
+  #dropzone { padding: 0 20px; gap: 16px; }
+  #dzHistory { max-width: 100%; }
+  #dzHistory .hcard { width: 120px; }
+
+  /* Controls panel: COLLAPSED = compact pill top-right (hugs header so the
+     history-pill keeps the top-left corner). EXPANDED = full-width drawer that
+     overlays everything (raised z-index) — no pill bleed-through. */
+  #panel {
+    top: 12px; right: 12px; left: auto; width: auto;
+    padding: 10px 14px; max-height: none; overflow: visible;
+  }
+  #panel.expanded {
+    left: 12px; right: 12px; width: auto; z-index: 35;
+    padding: 14px 16px; max-height: calc(100vh - 24px); overflow-y: auto;
+  }
+  .panel-header {
+    display: flex; align-items: center; justify-content: space-between; gap: 14px;
+    cursor: pointer; user-select: none;
+  }
+  #panel h2 { margin-bottom: 0; }
+  .panel-toggle { display: flex; }
+  #panel:not(.expanded) .panel-toggle { transform: rotate(0deg); }
+  #panel.expanded .panel-toggle { transform: rotate(180deg); }
+  .panel-body {
+    overflow: hidden; max-height: 0; opacity: 0;
+    transition: max-height .3s ease, opacity .2s ease;
+  }
+  #panel.expanded .panel-body {
+    max-height: calc(100vh - 90px); opacity: 1; margin-top: 16px;
+  }
+
+  /* Reload pill + history pill: smaller, won't collide with panel */
+  .reload-pill, .history-pill { padding: 10px 18px; font-size: 10px; }
+  /* History pill matches the collapsed Tune pill's height (48px: 10px padding + 28px toggle) */
+  .history-pill { top: 12px; left: 12px; padding: 18px 18px; display: flex; align-items: center; }
+  .reload-pill { bottom: 16px; right: 16px; }
+
+  /* Library panel fits the viewport */
+  #historyPanel {
+    top: 64px; left: 12px; right: 12px; bottom: 56px; width: auto;
+  }
+  #dzHistory .hcard, .hcard { width: auto; }
+
+  /* Color popover: cap width, keep on-screen */
+  #colorPop { width: min(180px, calc(100vw - 24px)); }
+
+  /* Toast fits narrow viewports, sits above the reload pill */
+  #toast { left: 12px; right: 12px; max-width: none; bottom: 64px; }
+
+  #status { left: 12px; bottom: 12px; }
+}

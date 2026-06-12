@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Particle Constellation1</title>
+<title>Particle Studio</title>
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -22,7 +22,13 @@
 </div>
 
 <div id="panel">
-  <h2>Tune</h2>
+  <div class="panel-header" id="panelHeader">
+    <h2>Tune</h2>
+    <button class="panel-toggle" id="panelToggle" aria-label="Toggle controls" aria-expanded="false">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+    </button>
+  </div>
+  <div class="panel-body" id="panelBody">
   <div class="row">
     <label>Particles <span id="countVal">9000</span></label>
     <input type="range" id="countSlider" min="1500" max="15000" step="500" value="9000">
@@ -63,6 +69,7 @@
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9 9 0 0 0-6.4 2.6L3 8"/><path d="M3 3v5h5"/></svg>
     Reset to defaults
   </button>
+  </div>
 </div>
 
 <button class="reload-pill" id="reloadBtn">Load another model</button>

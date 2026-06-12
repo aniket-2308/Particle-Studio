@@ -88,8 +88,10 @@
       "    let cfg = {}, model = null;\n" +
       "    try {\n" +
       "      if (j.scene) {\n" +
-      "        const r = await fetch(j.supaUrl + '/rest/v1/scenes?select=*&id=eq.' + encodeURIComponent(j.scene), {\n" +
-      "          headers: { apikey: j.supaKey, Authorization: 'Bearer ' + j.supaKey } });\n" +
+      "        const r = await fetch(j.supaUrl + '/rest/v1/rpc/get_scene', {\n" +
+      "          method: 'POST',\n" +
+      "          headers: { apikey: j.supaKey, Authorization: 'Bearer ' + j.supaKey, 'Content-Type': 'application/json' },\n" +
+      "          body: JSON.stringify({ p_id: j.scene }) });\n" +
       "        const rows = await r.json();\n" +
       "        const row = Array.isArray(rows) ? rows[0] : null;\n" +
       "        if (!row) throw new Error('scene not found: ' + j.scene);\n" +
