@@ -52,15 +52,50 @@ canvas { display: block; }
 input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 1px; background: rgba(255,255,255,0.2); outline: none; }
 input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--color-plum-voltage); cursor: pointer; }
 input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border: none; border-radius: 50%; background: var(--color-plum-voltage); cursor: pointer; }
-.swatches { display: flex; gap: 8px; }
-.swatch { width: 28px; height: 28px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; transition: border-color .15s ease; }
-.swatch.active { border-color: var(--color-bone); }
+.swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+.swatch {
+  position: relative; width: 28px; height: 28px; padding: 0; border-radius: 50%; cursor: pointer;
+  border: 2px solid transparent; overflow: hidden; transition: border-color .15s ease, transform .12s ease;
+}
+.swatch:hover { transform: scale(1.08); }
+/* Pencil overlay reveals on hover -> color is editable */
+.swatch-edit {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.4); opacity: 0; transition: opacity .15s ease;
+}
+.swatch:hover .swatch-edit { opacity: 1; }
+.swatch-edit svg { width: 12px; height: 12px; stroke: #fff; }
 .swatch-add {
-  display: flex; align-items: center; justify-content: center;
+  display: flex; align-items: center; justify-content: center; overflow: visible;
   border: 1px dashed rgba(255,255,255,0.35); background: transparent; color: var(--color-smoke);
 }
 .swatch-add svg { width: 14px; height: 14px; }
-.swatch-add:hover { border-color: var(--color-plum-voltage); color: var(--color-bone); }
+.swatch-add:hover { border-color: var(--color-plum-voltage); color: var(--color-bone); transform: none; }
+
+/* Color edit popover (anchored near the swatch being edited) */
+#colorPop {
+  position: fixed; z-index: 50; width: 180px; padding: 12px; border-radius: 14px;
+  background: rgba(0,0,0,0.85); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.12);
+  display: none; flex-direction: column; gap: 10px;
+}
+#colorPop.visible { display: flex; }
+#colorPop input[type=color] {
+  width: 100%; height: 40px; border: 1px solid rgba(255,255,255,0.12); border-radius: 8px;
+  background: none; cursor: pointer; padding: 2px;
+}
+#colorPop input[type=text] {
+  width: 100%; font-family: inherit; font-size: 12px; letter-spacing: 0.04em; color: var(--color-bone);
+  background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 7px 9px;
+}
+.pop-actions { display: flex; gap: 8px; }
+.pop-actions button {
+  flex: 1; font-family: inherit; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  border-radius: 8px; padding: 8px; cursor: pointer; border: 1px solid rgba(255,255,255,0.15);
+  background: transparent; color: var(--color-bone); transition: opacity .15s ease, background .15s ease;
+}
+#popSave { background: var(--color-plum-voltage); border-color: var(--color-plum-voltage); }
+#popDelete { color: #ff6b6b; }
+#popDelete:disabled { opacity: 0.35; cursor: not-allowed; }
 
 /* Panel buttons (copy / download) */
 .pbtn {
@@ -132,5 +167,17 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border: none; b
 #dzHistory .hmeta { padding: 8px 10px; }
 
 #status { position: fixed; bottom: 24px; left: 24px; z-index: 20; font-size: 12px; letter-spacing: 0.021em; color: var(--color-smoke); }
+
+/* Error toast (bottom-left, above status) */
+#toast {
+  position: fixed; bottom: 56px; left: 24px; z-index: 40; max-width: 320px;
+  border: 1px solid rgba(255,255,255,0.12); border-left: 2px solid var(--color-amber-spark);
+  border-radius: 12px; padding: 12px 16px; font-size: 12px; line-height: 1.4;
+  letter-spacing: 0.021em; color: var(--color-bone); background: rgba(0,0,0,0.72);
+  backdrop-filter: blur(8px); cursor: pointer;
+  opacity: 0; transform: translateY(8px); pointer-events: none;
+  transition: opacity .25s ease, transform .25s ease;
+}
+#toast.visible { opacity: 1; transform: none; pointer-events: auto; }
+
 input[type=file] { display: none; }
-input[type=color] { position: fixed; width: 0; height: 0; opacity: 0; pointer-events: none; border: none; }

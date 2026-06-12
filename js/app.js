@@ -1,6 +1,8 @@
-import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { MeshSurfaceSampler } from 'three/addons/math/MeshSurfaceSampler.js';
+// Studio UI — wires the controls panel, drag/drop, export and Supabase library
+// to the shared particle engine (js/engine.js). Rendering/sampling/animation
+// all live in the engine now; this file is glue + persistence.
+
+import { createParticleStudio, THREE } from './engine.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { createClient } from '@supabase/supabase-js';
 
@@ -9,266 +11,163 @@ const SUPABASE_URL = 'https://exjemvfvuvgoyhovwhkx.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_2V2OfOlixSXDWj4wNknohA_ftiBU7SF';
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// ---- Palette (Dala / SafeIgnite) ----
-const PALETTE = {
-  bone:  new THREE.Color('#ffffff'),
-  plum:  new THREE.Color('#8052ff'),
-  amber: new THREE.Color('#ffb829'),
-  lichen:new THREE.Color('#15846e'),
-};
-// Accent presets: each carries its own weighted color stops, so custom
-// picked colors slot in alongside the built-ins.
-const ACCENT_PRESETS = [
-  { name: 'plum',  color: '#8052ff', stops: [{ color: PALETTE.plum, w: 0.55 }, { color: PALETTE.bone, w: 0.40 }, { color: PALETTE.amber, w: 0.05 }] },
-  { name: 'amber', color: '#ffb829', stops: [{ color: PALETTE.amber, w: 0.45 }, { color: PALETTE.bone, w: 0.45 }, { color: PALETTE.plum, w: 0.10 }] },
-];
-let activeAccent = 0;
+// Hosted embed loader (uploaded into the public `models` bucket under embed/)
+const EMBED_LOADER = `${SUPABASE_URL}/storage/v1/object/public/models/embed/embed.js`;
 
-// ---- Scene ----
+// Short, URL-safe id (no ambiguous chars) for scene links
+function shortId(len = 8) {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  const bytes = crypto.getRandomValues(new Uint8Array(len));
+  let s = '';
+  for (let i = 0; i < len; i++) s += chars[bytes[i] % chars.length];
+  return s;
+}
+
+// ---- Color mix: the cloud blends ALL swatches at equal weight ----
+const DEFAULT_PALETTE = ['#00e5ff'];   // start with one cyan
+let palette = DEFAULT_PALETTE.slice();
+const HEX_RE = /^#[0-9a-fA-F]{6}$/;
+const ACCENT_ALIASES = { plum: '#8052ff', amber: '#ffb829', electric_blue: '#2f6bff', lichen: '#15846e', bone: '#ffffff' };
+
+// Equal-weight stops across the whole palette -> engine picks a weighted-random
+// color per particle, so every swatch is mixed into the cloud.
+function accentStops() {
+  const w = 1 / Math.max(1, palette.length);
+  return palette.map(h => [new THREE.Color(h), w]);
+}
+function applyAccent() { studio?.setConfig({ accent: accentStops() }); }
+
+// ---- DOM ----
 const stage = document.getElementById('stage');
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 1000);
-camera.position.set(0, 0, 5);
-
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-stage.appendChild(renderer.domElement);
-
-// Circular sprite texture for soft particles
-function makeSprite() {
-  const s = 64, c = document.createElement('canvas'); c.width = c.height = s;
-  const ctx = c.getContext('2d');
-  const g = ctx.createRadialGradient(s/2, s/2, 0, s/2, s/2, s/2);
-  g.addColorStop(0, 'rgba(255,255,255,1)');
-  g.addColorStop(0.5, 'rgba(255,255,255,0.6)');
-  g.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = g; ctx.fillRect(0,0,s,s);
-  const t = new THREE.CanvasTexture(c); t.needsUpdate = true; return t;
-}
-const sprite = makeSprite();
-
-// Shared by the live material and the exported standalone snippet
-const PARTICLE_VERT = `
-  attribute float size;
-  attribute float seed;
-  varying vec3 vColor;
-  uniform float uTime;
-  uniform float uPixelRatio;
-  void main() {
-    vColor = color;
-    vec3 p = position;
-    // subtle ambient drift
-    p.x += sin(uTime * 0.4 + seed) * 0.012;
-    p.y += cos(uTime * 0.35 + seed * 1.3) * 0.012;
-    vec4 mv = modelViewMatrix * vec4(p, 1.0);
-    gl_PointSize = size * 7.0 * uPixelRatio * (1.0 / -mv.z);
-    gl_Position = projectionMatrix * mv;
-  }
-`;
-const PARTICLE_FRAG = `
-  uniform sampler2D uTex;
-  varying vec3 vColor;
-  void main() {
-    float a = texture2D(uTex, gl_PointCoord).a;
-    if (a < 0.05) discard;
-    gl_FragColor = vec4(vColor, a);
-  }
-`;
-
-let points = null;          // THREE.Points
-let sampledMesh = null;     // merged source geometry for resampling
-let baseSizeAttr = null;    // per-particle base sizes
-let loadedFile = null;      // the raw dropped .glb/.gltf File, for export
-
-// Weighted random color pick across an accent's stops
-function pickColor(stops) {
-  const r = Math.random();
-  let acc = 0;
-  for (const s of stops) {
-    acc += s.w;
-    if (r <= acc) return s.color;
-  }
-  return stops.length ? stops[stops.length - 1].color : PALETTE.bone;
-}
-
-// ---- Build particle system from a loaded scene ----
-function buildFromObject(root) {
-  // Collect all meshes, merge into one sampler-friendly mesh
-  const meshes = [];
-  root.updateWorldMatrix(true, true);
-  root.traverse(o => { if (o.isMesh && o.geometry) meshes.push(o); });
-  if (!meshes.length) { setStatus('No mesh found in file.'); return false; }
-
-  // Build a combined non-indexed geometry in world space
-  const geos = [];
-  for (const m of meshes) {
-    let g = m.geometry.clone();
-    g.applyMatrix4(m.matrixWorld);
-    if (g.index) g = g.toNonIndexed();
-    // keep only position
-    const pos = g.getAttribute('position');
-    const ng = new THREE.BufferGeometry();
-    ng.setAttribute('position', pos.clone());
-    geos.push(ng);
-  }
-  const merged = mergeGeometries(geos);
-  merged.computeVertexNormals();
-  sampledMesh = new THREE.Mesh(merged, new THREE.MeshBasicMaterial());
-
-  // Normalize scale/center
-  merged.computeBoundingBox();
-  const bb = merged.boundingBox;
-  const center = new THREE.Vector3(); bb.getCenter(center);
-  const size = new THREE.Vector3(); bb.getSize(size);
-  const scale = 2.6 / Math.max(size.x, size.y, size.z);
-  sampledMesh.scale.setScalar(scale);
-  sampledMesh.position.sub(center.clone().multiplyScalar(scale));
-  sampledMesh.updateWorldMatrix(true, false);
-  // bake transform into geometry so sampler works in final coords
-  merged.applyMatrix4(sampledMesh.matrixWorld);
-  sampledMesh.position.set(0,0,0); sampledMesh.scale.setScalar(1); sampledMesh.updateWorldMatrix(true,false);
-  merged.computeBoundingBox();
-
-  resample();
-  dropzone.classList.add('hidden');
-  panel.classList.add('visible');
-  reloadPill.classList.add('visible');
-  setStatus('Loaded · drag cursor to parallax');
-  return true;
-}
-
-// Minimal geometry merge (positions only)
-function mergeGeometries(geos) {
-  let total = 0;
-  for (const g of geos) total += g.getAttribute('position').count;
-  const arr = new Float32Array(total * 3);
-  let offset = 0;
-  for (const g of geos) {
-    const p = g.getAttribute('position').array;
-    arr.set(p, offset); offset += p.length;
-  }
-  const merged = new THREE.BufferGeometry();
-  merged.setAttribute('position', new THREE.BufferAttribute(arr, 3));
-  return merged;
-}
-
-// ---- Sample surface -> particles, with center-density bias ----
-function resample() {
-  if (!sampledMesh) return;
-  const count = parseInt(countSlider.value, 10);
-  const densBias = parseFloat(densSlider.value);
-  const baseSize = parseFloat(sizeSlider.value);
-  const stops = ACCENT_PRESETS[activeAccent].stops;
-
-  const sampler = new MeshSurfaceSampler(sampledMesh).build();
-  const tmp = new THREE.Vector3();
-
-  // First pass: oversample, then keep with radial probability for organic density
-  const positions = [];
-  const colors = [];
-  const sizes = [];
-  const seeds = [];
-
-  // estimate centroid + radius from bounding box
-  const bb = sampledMesh.geometry.boundingBox;
-  const c = new THREE.Vector3(); bb.getCenter(c);
-  const r = new THREE.Vector3(); bb.getSize(r);
-  const maxR = Math.max(r.x, r.y, r.z) * 0.5 || 1;
-
-  let attempts = 0, kept = 0, maxAttempts = count * 6;
-  while (kept < count && attempts < maxAttempts) {
-    attempts++;
-    sampler.sample(tmp);
-    const d = tmp.distanceTo(c) / maxR;            // 0 center -> 1 edge
-    const keepProb = 1 - Math.min(d, 1) * densBias; // denser center
-    if (Math.random() > keepProb) continue;
-    kept++;
-    positions.push(tmp.x, tmp.y, tmp.z);
-    const col = pickColor(stops);
-    colors.push(col.r, col.g, col.b);
-    // edge particles slightly smaller -> drift feel
-    sizes.push(baseSize * (0.5 + Math.random() * (1 - d * 0.5)));
-    seeds.push(Math.random() * Math.PI * 2);
-  }
-
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-  geo.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1));
-  geo.setAttribute('seed', new THREE.Float32BufferAttribute(seeds, 1));
-
-  const mat = new THREE.ShaderMaterial({
-    uniforms: {
-      uTex: { value: sprite },
-      uTime: { value: 0 },
-      uPixelRatio: { value: Math.min(devicePixelRatio, 2) },
-    },
-    vertexShader: PARTICLE_VERT,
-    fragmentShader: PARTICLE_FRAG,
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-    vertexColors: true,
-  });
-
-  if (points) { scene.remove(points); points.geometry.dispose(); points.material.dispose(); }
-  points = new THREE.Points(geo, mat);
-  scene.add(points);
-  setStatus(`Loaded · ${kept.toLocaleString()} particles · drag cursor to parallax`);
-}
-
-// ---- Mouse parallax ----
-const mouse = new THREE.Vector2(0, 0);
-const targetRot = new THREE.Vector2(0, 0);
-addEventListener('pointermove', e => {
-  mouse.x = (e.clientX / innerWidth) * 2 - 1;
-  mouse.y = (e.clientY / innerHeight) * 2 - 1;
-});
-
-const clock = new THREE.Clock();
-function animate() {
-  requestAnimationFrame(animate);
-  const t = clock.getElapsedTime();
-  if (points) {
-    points.material.uniforms.uTime.value = t;
-    const para = parseFloat(paraSlider.value);
-    targetRot.x += (mouse.y * 0.25 * para - targetRot.x) * 0.05;
-    targetRot.y += (mouse.x * 0.4 * para - targetRot.y) * 0.05;
-    points.rotation.x = targetRot.x;
-    points.rotation.y = targetRot.y + t * 0.04; // slow ambient spin
-  }
-  renderer.render(scene, camera);
-}
-animate();
-
-addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-});
-
-// ---- File loading ----
 const dropzone = document.getElementById('dropzone');
 const panel = document.getElementById('panel');
 const reloadPill = document.getElementById('reloadBtn');
 const fileInput = document.getElementById('fileInput');
-const loader = new GLTFLoader();
+const countSlider = document.getElementById('countSlider');
+const sizeSlider  = document.getElementById('sizeSlider');
+const densSlider  = document.getElementById('densSlider');
+const paraSlider  = document.getElementById('paraSlider');
+const status = document.getElementById('status');
+function setStatus(s) { status.textContent = s; }
 
-function loadFile(file) {
+// ---- Error toast (bottom-left, auto-dismiss + click-to-dismiss) ----
+const toast = document.getElementById('toast');
+let toastTimer = null;
+function showToast(msg) {
+  if (!toast) return;
+  toast.textContent = msg;
+  toast.classList.add('visible');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(hideToast, 4000);
+}
+function hideToast() { clearTimeout(toastTimer); toast?.classList.remove('visible'); }
+toast?.addEventListener('click', hideToast);
+
+// ---- Settings persistence (single namespaced localStorage blob) ----
+const SETTINGS_KEY = 'particleStudio_settings';
+const DEFAULT_SETTINGS = { particleCount: 9000, size: 1.0, densBias: 0.6, parallax: 1.0 };
+
+let studio = null;        // engine instance, created lazily on first load
+let loadedFile = null;
+let currentModel = null;  // { id, file_path } of the loaded model, for scene links
+
+function currentConfig() {
+  return {
+    particleCount: parseInt(countSlider.value, 10),
+    size: parseFloat(sizeSlider.value),
+    densBias: parseFloat(densSlider.value),
+    parallaxStrength: parseFloat(paraSlider.value),
+    accent: accentStops(),
+    animation: 'idle',
+    autoRotate: true,
+  };
+}
+
+// ---- Settings persistence ----
+// Palette persists as a plain hex array.
+function saveSettings() {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      particleCount: parseInt(countSlider.value, 10),
+      size: parseFloat(sizeSlider.value),
+      densBias: parseFloat(densSlider.value),
+      parallax: parseFloat(paraSlider.value),
+      palette: palette.slice(),
+    }));
+  } catch (e) { /* private mode / quota — non-fatal */ }
+}
+
+function syncLabels() {
+  countVal.textContent = countSlider.value;
+  sizeVal.textContent = parseFloat(sizeSlider.value).toFixed(1);
+  densVal.textContent = parseFloat(densSlider.value).toFixed(2);
+  paraVal.textContent = parseFloat(paraSlider.value).toFixed(1);
+}
+
+// Restore slider + accent state into the DOM (runs before swatches/engine exist).
+function loadSettings() {
+  let s = null;
+  try { s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || 'null'); }
+  catch (e) { console.warn('[particle-studio] bad saved settings, using defaults'); }
+  if (!s || typeof s !== 'object') { syncLabels(); return; }
+
+  if (Number.isFinite(s.particleCount)) countSlider.value = s.particleCount;
+  if (Number.isFinite(s.size)) sizeSlider.value = s.size;
+  if (Number.isFinite(s.densBias)) densSlider.value = s.densBias;
+  if (Number.isFinite(s.parallax)) paraSlider.value = s.parallax;
+  syncLabels();
+
+  if (Array.isArray(s.palette)) {
+    const clean = s.palette.filter(h => typeof h === 'string' && HEX_RE.test(h));
+    if (clean.length) palette = clean;
+  } else if (typeof s.accent === 'string') {     // migrate old single-accent setting
+    const hex = HEX_RE.test(s.accent) ? s.accent : ACCENT_ALIASES[s.accent];
+    if (hex) palette = [hex];
+  }
+}
+
+function resetSettings() {
+  try { localStorage.removeItem(SETTINGS_KEY); } catch (e) { /* ignore */ }
+  countSlider.value = DEFAULT_SETTINGS.particleCount;
+  sizeSlider.value = DEFAULT_SETTINGS.size;
+  densSlider.value = DEFAULT_SETTINGS.densBias;
+  paraSlider.value = DEFAULT_SETTINGS.parallax;
+  syncLabels();
+  palette = DEFAULT_PALETTE.slice();
+  closeColorPop();
+  renderPalette();
+  studio?.setConfig({
+    particleCount: DEFAULT_SETTINGS.particleCount, size: DEFAULT_SETTINGS.size,
+    densBias: DEFAULT_SETTINGS.densBias, parallaxStrength: DEFAULT_SETTINGS.parallax,
+    accent: accentStops(),
+  });
+  saveSettings();
+  setStatus('Settings reset to defaults');
+}
+
+// ---- File loading ----
+async function loadFile(file) {
   if (!file) return;
+  const hadStudio = !!studio;       // so a first-load failure leaves the dropzone clean
   loadedFile = file;
   setStatus('Sampling…');
-  const url = URL.createObjectURL(file);
-  loader.load(url, gltf => {
-    if (points) { scene.remove(points); points = null; }
-    const ok = buildFromObject(gltf.scene);
-    URL.revokeObjectURL(url);
-    if (ok) saveToLibrary(file);
-  }, undefined, err => {
-    setStatus('Could not parse that file. Try a .glb or .gltf.');
-    console.error(err);
-  });
+  try {
+    if (!studio) studio = createParticleStudio(stage, currentConfig());
+    else studio.setConfig(currentConfig());
+    await studio.loadModelFromFile(file);
+    dropzone.classList.add('hidden');
+    panel.classList.add('visible');
+    reloadPill.classList.add('visible');
+    hideToast();                    // clear any prior error on success
+    setStatus(`Loaded · ${studio.getPointCount().toLocaleString()} particles · drag cursor to parallax`);
+    saveToLibrary(file);
+  } catch (err) {
+    console.error('[particle-studio] file load failed:', err);
+    // Keep any existing cloud visible; only tear down a studio we just created.
+    if (!hadStudio && studio) { studio.dispose(); studio = null; }
+    setStatus('');
+    showToast("Couldn't open that file — try a different one.");
+  }
 }
 
 ['dragenter','dragover'].forEach(ev => addEventListener(ev, e => {
@@ -277,179 +176,126 @@ function loadFile(file) {
 ['dragleave','drop'].forEach(ev => addEventListener(ev, e => {
   e.preventDefault(); dropzone.classList.remove('dragging');
 }));
-addEventListener('drop', e => {
-  const f = e.dataTransfer.files[0]; loadFile(f);
-});
+addEventListener('drop', e => loadFile(e.dataTransfer.files[0]));
 document.getElementById('browseBtn').addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', e => loadFile(e.target.files[0]));
 reloadPill.addEventListener('click', () => {
   dropzone.classList.remove('hidden'); panel.classList.remove('visible'); reloadPill.classList.remove('visible');
-  if (points) { scene.remove(points); points.geometry.dispose(); points = null; }
+  if (studio) { studio.dispose(); studio = null; }
   setStatus('');
 });
 
 // ---- Controls ----
-const countSlider = document.getElementById('countSlider');
-const sizeSlider  = document.getElementById('sizeSlider');
-const densSlider  = document.getElementById('densSlider');
-const paraSlider  = document.getElementById('paraSlider');
-const status = document.getElementById('status');
-function setStatus(s){ status.textContent = s; }
+countSlider.oninput = () => { countVal.textContent = countSlider.value; studio?.setConfig({ particleCount: parseInt(countSlider.value, 10) }); saveSettings(); };
+sizeSlider.oninput  = () => { sizeVal.textContent = parseFloat(sizeSlider.value).toFixed(1); studio?.setConfig({ size: parseFloat(sizeSlider.value) }); saveSettings(); };
+densSlider.oninput  = () => { densVal.textContent = parseFloat(densSlider.value).toFixed(2); studio?.setConfig({ densBias: parseFloat(densSlider.value) }); saveSettings(); };
+paraSlider.oninput  = () => { paraVal.textContent = parseFloat(paraSlider.value).toFixed(1); studio?.setConfig({ parallaxStrength: parseFloat(paraSlider.value) }); saveSettings(); };
+document.getElementById('resetBtn').addEventListener('click', resetSettings);
 
-countSlider.oninput = () => { countVal.textContent = countSlider.value; resample(); };
-sizeSlider.oninput  = () => { sizeVal.textContent = parseFloat(sizeSlider.value).toFixed(1); resample(); };
-densSlider.oninput  = () => { densVal.textContent = parseFloat(densSlider.value).toFixed(2); resample(); };
-paraSlider.oninput  = () => { paraVal.textContent = parseFloat(paraSlider.value).toFixed(1); };
-
-// Accent swatches + "+" custom-color generator
+// ---- Palette swatches + edit popover ----
 const swatchWrap = document.getElementById('swatches');
-const accentPicker = document.getElementById('accentPicker');
+const colorPop = document.getElementById('colorPop');
+const popColor = document.getElementById('popColor');
+const popHex = document.getElementById('popHex');
+const popSave = document.getElementById('popSave');
+const popDelete = document.getElementById('popDelete');
+const EDIT_SVG = '<span class="swatch-edit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>';
+let editIdx = -1;
 
-function renderSwatches() {
+function swatchEls() { return [...swatchWrap.querySelectorAll('.swatch:not(.swatch-add)')]; }
+
+function renderPalette() {
   swatchWrap.innerHTML = '';
-  ACCENT_PRESETS.forEach((preset, i) => {
-    const el = document.createElement('div');
-    el.className = 'swatch' + (i === activeAccent ? ' active' : '');
-    el.style.background = preset.color;
-    el.title = preset.name;
-    el.onclick = () => { activeAccent = i; renderSwatches(); resample(); };
+  palette.forEach((hex, i) => {
+    const el = document.createElement('button');
+    el.className = 'swatch';
+    el.style.background = hex;
+    el.title = 'Click to edit';
+    el.innerHTML = EDIT_SVG;
+    el.onclick = () => openColorPop(i, el);
     swatchWrap.appendChild(el);
   });
   const add = document.createElement('button');
   add.className = 'swatch swatch-add';
-  add.title = 'Generate accent';
+  add.title = 'Add color';
   add.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>';
-  add.onclick = () => accentPicker.click();
+  add.onclick = addColor;
   swatchWrap.appendChild(add);
 }
-renderSwatches();
 
-// Picked color becomes a new accent (dominant color + bone, light spill)
-accentPicker.addEventListener('change', e => {
-  const hex = e.target.value;
-  const picked = new THREE.Color(hex);
-  ACCENT_PRESETS.push({
-    name: 'custom ' + hex,
-    color: hex,
-    stops: [{ color: picked, w: 0.55 }, { color: PALETTE.bone, w: 0.40 }, { color: picked.clone(), w: 0.05 }],
-  });
-  activeAccent = ACCENT_PRESETS.length - 1;
-  renderSwatches();
-  resample();
-});
-
-// ---- Particle export (Copy particle scene / Download particles .glb) ----
-// Exports the GENERATED constellation (sampled positions + colors), not the
-// original dropped model — usable elsewhere for explosion/distortion scenes.
-function bufToBase64(buf) {
-  const bytes = new Uint8Array(buf);
-  let bin = '';
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-  }
-  return btoa(bin);
+function addColor() {
+  palette.push('#ffffff');
+  renderPalette();
+  applyAccent();
+  saveSettings();
+  const els = swatchEls();
+  openColorPop(palette.length - 1, els[els.length - 1]);  // edit it immediately
 }
 
-// Current point cloud -> binary glTF (POINTS primitive, vertex colors)
+function positionPop(anchorEl) {
+  const r = anchorEl.getBoundingClientRect();
+  const w = 180, h = 150;
+  let left = r.left - w - 12;                 // sit to the LEFT of the swatch (panel is on the right)
+  if (left < 12) left = r.right + 12;         // flip to the right if no room
+  const top = Math.max(12, Math.min(innerHeight - h - 12, r.top - 8));
+  colorPop.style.left = left + 'px';
+  colorPop.style.top = top + 'px';
+}
+
+function openColorPop(i, anchorEl) {
+  editIdx = i;
+  popColor.value = palette[i];
+  popHex.value = palette[i];
+  popDelete.disabled = palette.length <= 1;   // never delete the last color
+  positionPop(anchorEl);
+  colorPop.classList.add('visible');
+}
+function closeColorPop() { colorPop.classList.remove('visible'); editIdx = -1; }
+
+function updateEditColor(hex) {
+  if (editIdx < 0 || !HEX_RE.test(hex)) return;
+  palette[editIdx] = hex;
+  const els = swatchEls();
+  if (els[editIdx]) els[editIdx].style.background = hex;  // live swatch preview
+  applyAccent();                                          // live cloud preview
+}
+
+popColor.oninput = () => { popHex.value = popColor.value; updateEditColor(popColor.value); };
+popHex.oninput = () => { const v = popHex.value.trim(); if (HEX_RE.test(v)) { popColor.value = v; updateEditColor(v); } };
+popSave.onclick = () => { saveSettings(); closeColorPop(); setStatus('Color saved'); };
+popDelete.onclick = () => {
+  if (palette.length <= 1) return;
+  palette.splice(editIdx, 1);
+  closeColorPop();
+  renderPalette();
+  applyAccent();
+  saveSettings();
+};
+// Dismiss popover on outside click
+addEventListener('pointerdown', e => {
+  if (colorPop.classList.contains('visible') && !colorPop.contains(e.target) && !e.target.closest('.swatch')) closeColorPop();
+});
+
+loadSettings();      // restore sliders + palette before first paint
+renderPalette();
+
+// ---- Particle export (Download particles .glb) ----
+// Current resting point cloud -> binary glTF (POINTS primitive, vertex colors)
 function exportParticlesGLB() {
   return new Promise((resolve, reject) => {
-    if (!points) return reject(new Error('No particles to export'));
+    if (!studio) return reject(new Error('No particles to export'));
+    const { positions, colors } = studio.exportPositionsColors();
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', points.geometry.getAttribute('position').clone());
-    geo.setAttribute('color', points.geometry.getAttribute('color').clone());
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     const pts = new THREE.Points(geo, new THREE.PointsMaterial({ size: 0.02, vertexColors: true }));
     pts.name = 'particles';
     new GLTFExporter().parse(pts, resolve, reject, { binary: true });
   });
 }
 
-// Self-contained snippet: embedded particle .glb + the same shader/drift/parallax.
-function particleSnippet(b64) {
-  return `<!-- Particle constellation — exported from Particle Studio -->
-<div id="particle-stage" style="width:100%;height:480px;background:#000"></div>
-<script type="importmap">
-{ "imports": { "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
-<\/script>
-<script type="module">
-import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-
-const MODEL = 'data:model/gltf-binary;base64,${b64}';
-const stage = document.getElementById('particle-stage');
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(45, stage.clientWidth / stage.clientHeight, 0.1, 1000);
-camera.position.set(0, 0, 5);
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-renderer.setSize(stage.clientWidth, stage.clientHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-stage.appendChild(renderer.domElement);
-
-const sprite = (() => {
-  const s = 64, c = document.createElement('canvas'); c.width = c.height = s;
-  const x = c.getContext('2d'), g = x.createRadialGradient(s/2, s/2, 0, s/2, s/2, s/2);
-  g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.5, 'rgba(255,255,255,0.6)'); g.addColorStop(1, 'rgba(255,255,255,0)');
-  x.fillStyle = g; x.fillRect(0, 0, s, s);
-  return new THREE.CanvasTexture(c);
-})();
-
-let points = null;
-new GLTFLoader().load(MODEL, gltf => {
-  let src = null;
-  gltf.scene.traverse(o => { if (o.isPoints) src = o; });
-  if (!src) return;
-  const geo = src.geometry;
-  const n = geo.getAttribute('position').count;
-  const sizes = new Float32Array(n), seeds = new Float32Array(n);
-  for (let i = 0; i < n; i++) { sizes[i] = 0.5 + Math.random() * 0.7; seeds[i] = Math.random() * Math.PI * 2; }
-  geo.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
-  geo.setAttribute('seed', new THREE.BufferAttribute(seeds, 1));
-  points = new THREE.Points(geo, new THREE.ShaderMaterial({
-    uniforms: { uTex: { value: sprite }, uTime: { value: 0 }, uPixelRatio: { value: Math.min(devicePixelRatio, 2) } },
-    vertexShader: \`${PARTICLE_VERT}\`,
-    fragmentShader: \`${PARTICLE_FRAG}\`,
-    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, vertexColors: true,
-  }));
-  scene.add(points);
-});
-
-const mouse = new THREE.Vector2(), rot = new THREE.Vector2(), clock = new THREE.Clock();
-addEventListener('pointermove', e => { mouse.x = (e.clientX / innerWidth) * 2 - 1; mouse.y = (e.clientY / innerHeight) * 2 - 1; });
-(function animate() {
-  requestAnimationFrame(animate);
-  const t = clock.getElapsedTime();
-  if (points) {
-    points.material.uniforms.uTime.value = t;
-    rot.x += (mouse.y * 0.25 - rot.x) * 0.05;
-    rot.y += (mouse.x * 0.4 - rot.y) * 0.05;
-    points.rotation.x = rot.x;
-    points.rotation.y = rot.y + t * 0.04;
-  }
-  renderer.render(scene, camera);
-})();
-addEventListener('resize', () => {
-  camera.aspect = stage.clientWidth / stage.clientHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(stage.clientWidth, stage.clientHeight);
-});
-<\/script>`;
-}
-
-document.getElementById('copyBtn').addEventListener('click', async () => {
-  if (!points) { setStatus('No model loaded'); return; }
-  try {
-    setStatus('Building particle scene…');
-    const buf = await exportParticlesGLB();
-    await navigator.clipboard.writeText(particleSnippet(bufToBase64(buf)));
-    setStatus('Particle scene copied · paste into any page');
-  } catch (err) {
-    console.error(err);
-    setStatus('Copy failed — clipboard blocked');
-  }
-});
-
 document.getElementById('downloadBtn').addEventListener('click', async () => {
-  if (!points) { setStatus('No model loaded'); return; }
+  if (!studio) { setStatus('No model loaded'); return; }
   try {
     const buf = await exportParticlesGLB();
     const blob = new Blob([buf], { type: 'model/gltf-binary' });
@@ -459,10 +305,38 @@ document.getElementById('downloadBtn').addEventListener('click', async () => {
     a.download = `${base}-particles.glb`;
     a.click();
     URL.revokeObjectURL(a.href);
-    setStatus(`Particles downloaded · ${points.geometry.getAttribute('position').count.toLocaleString()} points`);
+    setStatus(`Particles downloaded · ${studio.getPointCount().toLocaleString()} points`);
   } catch (err) {
     console.error(err);
     setStatus('Export failed.');
+  }
+});
+
+// ---- Copy embed link: save current model + tuning as a Supabase scene ----
+document.getElementById('embedBtn').addEventListener('click', async () => {
+  if (!studio || !currentModel) { setStatus('Load a model first'); return; }
+  try {
+    setStatus('Creating embed link…');
+    const config = {
+      particleCount: parseInt(countSlider.value, 10),
+      size: parseFloat(sizeSlider.value),
+      densBias: parseFloat(densSlider.value),
+      parallaxStrength: parseFloat(paraSlider.value),
+      accent: palette.slice(),          // hex array -> engine mixes equally
+      animation: 'idle', autoRotate: true,
+    };
+    const id = shortId();
+    const { error } = await supabase.from('scenes').insert({
+      id, model_id: currentModel.id, file_path: currentModel.file_path,
+      name: loadedFile?.name || null, config,
+    });
+    if (error) throw error;
+    const link = `<script src="${EMBED_LOADER}?s=${id}"><\/script>`;
+    await navigator.clipboard.writeText(link);
+    setStatus('Embed link copied · paste into any page');
+  } catch (err) {
+    console.error(err);
+    setStatus('Could not create embed link');
   }
 });
 
@@ -497,27 +371,16 @@ function publicUrl(path) {
   return supabase.storage.from('models').getPublicUrl(path).data.publicUrl;
 }
 
-// Snapshot the constellation: render same-tick so the drawing buffer is fresh,
-// then crop the center square down to 512px.
-function captureThumb() {
-  renderer.render(scene, camera);
-  const src = renderer.domElement;
-  const side = 512;
-  const c = document.createElement('canvas'); c.width = c.height = side;
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, side, side);
-  const s = Math.min(src.width, src.height);
-  ctx.drawImage(src, (src.width - s) / 2, (src.height - s) / 2, s, s, 0, 0, side, side);
-  return new Promise(res => c.toBlob(res, 'image/jpeg', 0.8));
-}
-
 async function saveToLibrary(file) {
   try {
     setStatus('Loaded · saving to library…');
     const { data: existing, error: qErr } = await supabase.from('models')
-      .select('id').eq('name', file.name).eq('size_bytes', file.size).limit(1);
+      .select('id, file_path').eq('name', file.name).eq('size_bytes', file.size).limit(1);
     if (qErr) throw qErr;
-    if (existing.length) { setStatus('Loaded · already in library'); return; }
+    if (existing.length) {
+      currentModel = { id: existing[0].id, file_path: existing[0].file_path };
+      setStatus('Loaded · already in library'); return;
+    }
 
     const id = crypto.randomUUID();
     const filePath = `files/${id}-${file.name.replace(/[^\w.\-]+/g, '_')}`;
@@ -528,8 +391,8 @@ async function saveToLibrary(file) {
     // let the spin settle into a representative frame before snapshotting
     await new Promise(r => setTimeout(r, 600));
     let thumbPath = null;
-    if (loadedFile === file) {   // skip thumb if another model superseded this one
-      const blob = await captureThumb();
+    if (loadedFile === file && studio) {   // skip thumb if another model superseded this one
+      const blob = await studio.snapshotJPEG(512);
       if (blob) {
         thumbPath = `thumbs/${id}.jpg`;
         const { error: tErr } = await supabase.storage.from('models')
@@ -542,6 +405,7 @@ async function saveToLibrary(file) {
       .insert({ id, name: file.name, file_path: filePath, thumb_path: thumbPath, size_bytes: file.size });
     if (insErr) throw insErr;
 
+    currentModel = { id, file_path: filePath };
     setStatus('Loaded · saved to library');
     refreshHistory();
   } catch (err) {
@@ -556,11 +420,13 @@ async function openFromLibrary(row) {
     const res = await fetch(publicUrl(row.file_path));
     if (!res.ok) throw new Error('storage fetch ' + res.status);
     const blob = await res.blob();
+    currentModel = { id: row.id, file_path: row.file_path };
     historyPanel.classList.remove('visible');
     loadFile(new File([blob], row.name, { type: mimeForName(row.name) }));
   } catch (err) {
     console.error(err);
-    setStatus('Couldn’t fetch that model from the library.');
+    setStatus('');
+    showToast('Couldn’t fetch that model from the library.');
   }
 }
 

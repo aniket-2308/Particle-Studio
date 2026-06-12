@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Particle Studio — Factory</title>
+<style>
+  :root {
+    --void: #000; --bone: #fff; --smoke: #9a9a9a; --plum: #8052ff; --amber: #ffb829;
+    --line: rgba(255,255,255,0.1); --line2: rgba(255,255,255,0.15);
+    --font: 'Space Grotesk', ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { font-family: var(--font); background: var(--void); color: var(--bone); overflow: hidden;
+    display: grid; grid-template-columns: 260px 1fr 300px; }
+  h1, h2 { font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+  .col { height: 100vh; overflow-y: auto; padding: 24px; }
+  .col.left { border-right: 1px solid var(--line); }
+  .col.right { border-left: 1px solid var(--line); }
+  .eyebrow { font-size: 11px; color: var(--plum); margin-bottom: 4px; }
+  .col h2 { font-size: 12px; color: var(--smoke); margin: 0 0 18px; }
+
+  /* Template list */
+  .tpl { border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; margin-bottom: 12px;
+    cursor: pointer; background: rgba(255,255,255,0.02); transition: border-color .2s, background .2s; }
+  .tpl:hover { border-color: var(--line2); }
+  .tpl.active { border-color: var(--plum); background: rgba(128,82,255,0.08); }
+  .tpl .t-name { font-size: 14px; font-weight: 600; }
+  .tpl .t-desc { font-size: 12px; color: var(--smoke); margin-top: 4px; line-height: 1.4; }
+
+  /* Preview */
+  .col.mid { height: 100vh; padding: 0; position: relative; display: flex; flex-direction: column; }
+  #preview { flex: 1; border: none; width: 100%; background: #000; }
+  .mid-bar { padding: 16px 24px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 12px; }
+  .code-box { flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+    color: var(--smoke); background: rgba(255,255,255,0.03); border: 1px solid var(--line);
+    border-radius: 12px; padding: 10px 12px; white-space: nowrap; overflow-x: auto; }
+  .copy-btn { flex: none; border: 1px solid var(--line2); border-radius: 12px; padding: 10px 18px;
+    font-family: inherit; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--bone); background: var(--plum); cursor: pointer; transition: opacity .2s; }
+  .copy-btn:hover { opacity: 0.85; }
+  .mid-top { padding: 16px 24px; border-bottom: 1px solid var(--line); }
+  .mid-top .eyebrow { margin: 0; }
+  .mid-top .ptitle { font-size: 18px; font-weight: 200; }
+
+  /* Controls */
+  .row { margin-bottom: 18px; }
+  .row label { display: flex; justify-content: space-between; font-size: 12px; color: var(--bone); margin-bottom: 8px; }
+  .row label span { color: var(--plum); }
+  input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 1px; background: rgba(255,255,255,0.2); outline: none; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--plum); cursor: pointer; }
+  input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border: none; border-radius: 50%; background: var(--plum); cursor: pointer; }
+  select, .seg { width: 100%; font-family: inherit; font-size: 12px; color: var(--bone);
+    background: rgba(255,255,255,0.03); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+  .swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+  .swatch { width: 28px; height: 28px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; transition: border-color .15s; }
+  .swatch.active { border-color: var(--bone); }
+  .toggle { display: flex; align-items: center; gap: 8px; font-size: 12px; cursor: pointer; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+  <div class="col left">
+    <p class="eyebrow">Particle Studio</p>
+    <h2>Templates</h2>
+    <div id="tplList"></div>
+  </div>
+
+  <div class="col mid">
+    <div class="mid-top">
+      <p class="eyebrow">Live preview</p>
+      <div class="ptitle" id="previewTitle">—</div>
+    </div>
+    <iframe id="preview" title="preview"></iframe>
+    <div class="mid-bar">
+      <div class="code-box" id="codeBox">&lt;script&gt;…&lt;/script&gt;</div>
+      <button class="copy-btn" id="copyBtn">Copy Code</button>
+    </div>
+  </div>
+
+  <div class="col right">
+    <h2>Tune</h2>
+    <div class="row">
+      <label>Particles <span id="countVal"></span></label>
+      <input type="range" id="countSlider" min="1500" max="15000" step="500">
+    </div>
+    <div class="row">
+      <label>Size <span id="sizeVal"></span></label>
+      <input type="range" id="sizeSlider" min="0.3" max="3" step="0.1">
+    </div>
+    <div class="row">
+      <label>Parallax <span id="paraVal"></span></label>
+      <input type="range" id="paraSlider" min="0" max="3" step="0.1">
+    </div>
+    <div class="row" data-show="explode_on_hover">
+      <label>Acceleration <span id="accelVal"></span></label>
+      <input type="range" id="accelSlider" min="0.02" max="0.3" step="0.01">
+    </div>
+    <div class="row" data-show="explode_on_hover">
+      <label>Explosion radius <span id="explVal"></span></label>
+      <input type="range" id="explSlider" min="0.2" max="4" step="0.1">
+    </div>
+    <div class="row" data-show="dented">
+      <label>Dent amount <span id="dentVal"></span></label>
+      <input type="range" id="dentSlider" min="0" max="1.5" step="0.05">
+    </div>
+    <div class="row">
+      <label>Shape <span></span></label>
+      <select id="shapeSel">
+        <option value="sphere">Sphere</option>
+        <option value="box">Cube</option>
+        <option value="torus">Torus</option>
+      </select>
+    </div>
+    <div class="row">
+      <label>Accent</label>
+      <div class="swatches" id="swatches"></div>
+    </div>
+    <div class="row">
+      <label class="toggle"><input type="checkbox" id="autoRotate"> Auto-rotate</label>
+    </div>
+  </div>
+
+<script type="module">
+const ACCENT_HEX = { plum: '#8052ff', amber: '#ffb829', electric_blue: '#2f6bff', lichen: '#15846e', bone: '#ffffff' };
+const NUM_PARAMS = ['particleCount', 'size', 'parallaxStrength', 'acceleration', 'explosionRadius', 'dentAmount'];
+const PARAM_KEY = { particleCount: 'count', size: 'size', parallaxStrength: 'parallax',
+  acceleration: 'acceleration', explosionRadius: 'explosionRadius', dentAmount: 'dentAmount' };
+
+const base = location.href.replace(/factory\.html(\?.*)?$/, '');
+const embedURL = base + 'embed.js';
+
+let presets = {};
+let current = null;   // active config (clone of preset + edits)
+let currentKey = null;
+
+const $ = id => document.getElementById(id);
+
+async function init() {
+  presets = (await (await fetch('config.json')).json()).presets;
+  renderTemplateList();
+  selectTemplate(Object.keys(presets)[0]);
+  renderSwatches();
+  wireControls();
+}
+
+function renderTemplateList() {
+  const list = $('tplList');
+  list.innerHTML = '';
+  for (const [key, p] of Object.entries(presets)) {
+    const el = document.createElement('div');
+    el.className = 'tpl';
+    el.dataset.key = key;
+    el.innerHTML = `<div class="t-name">${p.name}</div><div class="t-desc">${p.description}</div>`;
+    el.onclick = () => selectTemplate(key);
+    list.appendChild(el);
+  }
+}
+
+function selectTemplate(key) {
+  currentKey = key;
+  current = JSON.parse(JSON.stringify(presets[key]));
+  document.querySelectorAll('.tpl').forEach(t => t.classList.toggle('active', t.dataset.key === key));
+  $('previewTitle').textContent = presets[key].name;
+  syncControlsFromConfig();
+  refreshPreview();
+  refreshCode();
+}
+
+// ---- controls <-> config ----
+function syncControlsFromConfig() {
+  $('countSlider').value = current.particleCount; $('countVal').textContent = current.particleCount;
+  $('sizeSlider').value = current.size; $('sizeVal').textContent = (+current.size).toFixed(1);
+  $('paraSlider').value = current.parallaxStrength; $('paraVal').textContent = (+current.parallaxStrength).toFixed(1);
+  $('accelSlider').value = current.acceleration; $('accelVal').textContent = (+current.acceleration).toFixed(2);
+  $('explSlider').value = current.explosionRadius; $('explVal').textContent = (+current.explosionRadius).toFixed(1);
+  $('dentSlider').value = current.dentAmount; $('dentVal').textContent = (+current.dentAmount).toFixed(2);
+  $('shapeSel').value = current.shape || 'sphere';
+  $('autoRotate').checked = !!current.autoRotate;
+  document.querySelectorAll('.swatch').forEach(s => s.classList.toggle('active', s.dataset.accent === current.accent));
+  // show/hide animation-specific rows
+  document.querySelectorAll('[data-show]').forEach(r => {
+    r.classList.toggle('hidden', r.dataset.show !== current.animation);
+  });
+}
+
+function wireControls() {
+  const bind = (id, key, fmt, parse) => {
+    $(id).oninput = () => {
+      const v = parse ? parse($(id).value) : $(id).value;
+      current[key] = v;
+      const lbl = $(id.replace('Slider', 'Val'));
+      if (lbl) lbl.textContent = fmt ? fmt(v) : v;
+      refreshPreview(); refreshCode();
+    };
+  };
+  bind('countSlider', 'particleCount', v => v, v => parseInt(v, 10));
+  bind('sizeSlider', 'size', v => (+v).toFixed(1), parseFloat);
+  bind('paraSlider', 'parallaxStrength', v => (+v).toFixed(1), parseFloat);
+  bind('accelSlider', 'acceleration', v => (+v).toFixed(2), parseFloat);
+  bind('explSlider', 'explosionRadius', v => (+v).toFixed(1), parseFloat);
+  bind('dentSlider', 'dentAmount', v => (+v).toFixed(2), parseFloat);
+  $('shapeSel').onchange = () => { current.shape = $('shapeSel').value; refreshPreview(); refreshCode(); };
+  $('autoRotate').onchange = () => { current.autoRotate = $('autoRotate').checked; refreshPreview(); refreshCode(); };
+}
+
+function renderSwatches() {
+  const wrap = $('swatches');
+  wrap.innerHTML = '';
+  for (const [key, hex] of Object.entries(ACCENT_HEX)) {
+    const el = document.createElement('div');
+    el.className = 'swatch';
+    el.dataset.accent = key;
+    el.style.background = hex;
+    el.title = key;
+    el.onclick = () => {
+      current.accent = key;
+      document.querySelectorAll('.swatch').forEach(s => s.classList.toggle('active', s === el));
+      refreshPreview(); refreshCode();
+    };
+    wrap.appendChild(el);
+  }
+}
+
+// ---- build the 1-liner ----
+function buildParams() {
+  const p = new URLSearchParams();
+  p.set('preset', currentKey);
+  const def = presets[currentKey];
+  // only include values that differ from the preset default
+  for (const k of NUM_PARAMS) {
+    if (current[k] != null && +current[k] !== +def[k]) p.set(PARAM_KEY[k], current[k]);
+  }
+  if (current.accent !== def.accent) p.set('accent', current.accent);
+  if ((current.shape || 'sphere') !== (def.shape || 'sphere')) p.set('shape', current.shape);
+  if (!!current.autoRotate !== !!def.autoRotate) p.set('autoRotate', current.autoRotate);
+  return p.toString();
+}
+
+function scriptTag() {
+  return `<script src="${embedURL}?${buildParams()}"><\/script>`;
+}
+
+function refreshCode() {
+  $('codeBox').textContent = scriptTag();
+}
+
+// ---- iframe preview (isolated; reuses the real embed path) ----
+function refreshPreview() {
+  const q = buildParams();
+  $('preview').srcdoc =
+    `<!doctype html><html><head><meta charset="utf-8">` +
+    `<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}</style></head>` +
+    `<body><script src="${embedURL}?${q}"><\/script></body></html>`;
+}
+
+$('copyBtn').onclick = async () => {
+  try {
+    await navigator.clipboard.writeText(scriptTag());
+    const b = $('copyBtn'); const old = b.textContent;
+    b.textContent = 'Copied!'; setTimeout(() => b.textContent = old, 1500);
+  } catch (e) { console.error(e); }
+};
+
+init();
+</script>
+</body>
+</html>

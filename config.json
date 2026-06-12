@@ -1,0 +1,69 @@
+{
+  "presets": {
+    "idle": {
+      "name": "Idle",
+      "description": "A calm constellation with cursor parallax and ambient drift.",
+      "model": null,
+      "shape": "sphere",
+      "animation": "idle",
+      "particleCount": 6000,
+      "size": 1.0,
+      "densBias": 0.6,
+      "parallaxStrength": 1.0,
+      "autoRotate": true,
+      "acceleration": 0.08,
+      "explosionRadius": 1.2,
+      "dentAmount": 0.5,
+      "accent": "plum"
+    },
+    "explode_on_hover": {
+      "name": "Explode on Hover",
+      "description": "Particles burst outward on mouse enter, drift back on leave.",
+      "model": null,
+      "shape": "sphere",
+      "animation": "explode_on_hover",
+      "particleCount": 6000,
+      "size": 1.0,
+      "densBias": 0.6,
+      "parallaxStrength": 1.0,
+      "autoRotate": true,
+      "acceleration": 0.08,
+      "explosionRadius": 1.6,
+      "dentAmount": 0.5,
+      "accent": "electric_blue"
+    },
+    "shape_shifter": {
+      "name": "Shape Shifter",
+      "description": "Morphs between cube, sphere and torus on a loop. Cursor speeds it up.",
+      "model": null,
+      "shape": "sphere",
+      "shapes": ["box", "sphere", "torus"],
+      "animation": "shape_shifter",
+      "particleCount": 6000,
+      "size": 1.0,
+      "densBias": 0.6,
+      "parallaxStrength": 1.0,
+      "autoRotate": true,
+      "acceleration": 0.08,
+      "explosionRadius": 1.2,
+      "dentAmount": 0.5,
+      "accent": "amber"
+    },
+    "dented": {
+      "name": "Dented",
+      "description": "A shape with random depth perturbation. Cursor jitters the dents.",
+      "model": null,
+      "shape": "sphere",
+      "animation": "dented",
+      "particleCount": 6000,
+      "size": 1.0,
+      "densBias": 0.6,
+      "parallaxStrength": 1.0,
+      "autoRotate": true,
+      "acceleration": 0.08,
+      "explosionRadius": 1.2,
+      "dentAmount": 0.6,
+      "accent": "lichen"
+    }
+  }
+}
