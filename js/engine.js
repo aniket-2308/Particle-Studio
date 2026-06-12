@@ -31,6 +31,7 @@ export const DEFAULTS = {
   acceleration: 0.08,         // explode lerp speed (0–1)
   explosionRadius: 1.2,
   dentAmount: 0.5,
+  hoverIntensity: 1.0,        // multiplier for hover-effect magnitude (read live)
   accent: 'plum',
 };
 
@@ -228,8 +229,14 @@ export function createParticleStudio(container, userConfig = {}) {
 
   // interaction state
   const mouse = new THREE.Vector2(0, 0);
-  let hovered = false;
+  let hovered = false;    // true only when the cursor is over the cloud disc, not the whole canvas
+  let pointerInside = false;
+  let boundR = 0;         // cloud bounding radius (max particle distance from origin)
+  let hoverCx = 0, hoverCy = 0, hoverRx = 2, hoverRy = 2; // projected hover ellipse (NDC)
   const targetRot = new THREE.Vector2(0, 0);
+  const dragRot = new THREE.Vector2(0, 0);   // extra rotation from click-drag, persists as spin
+  const dragVel = new THREE.Vector2(0, 0);   // momentum after release
+  let dragging = false, lastPX = 0, lastPY = 0;
 
   function size() {
     const w = container.clientWidth || container.offsetWidth || innerWidth;
@@ -240,7 +247,36 @@ export function createParticleStudio(container, userConfig = {}) {
     const { w, h } = size();
     camera.aspect = w / h; camera.updateProjectionMatrix();
     renderer.setSize(w, h);
+    computeHoverEllipse();
   }
+
+  // Project the cloud's bounding sphere to a screen-space (NDC) ellipse, so the
+  // hover effect only fires when the cursor is over the cloud — not the whole canvas.
+  function computeHoverEllipse() {
+    if (!boundR) { hoverCx = hoverCy = 0; hoverRx = hoverRy = 2; return; }
+    camera.updateMatrixWorld();
+    _mvp.multiplyMatrices(camera.projectionMatrix, _camInv.copy(camera.matrixWorld).invert());
+    const right = _v.setFromMatrixColumn(camera.matrixWorld, 0).multiplyScalar(boundR);
+    const ex = right.applyMatrix4(_mvp).x;                         // NDC x at +R right
+    const up = _v.setFromMatrixColumn(camera.matrixWorld, 1).multiplyScalar(boundR);
+    const ey = up.applyMatrix4(_mvp).y;                            // NDC y at +R up
+    const c = _v.set(0, 0, 0).applyMatrix4(_mvp);                  // cloud center in NDC
+    hoverCx = c.x; hoverCy = c.y;
+    hoverRx = Math.max(0.05, Math.abs(ex - hoverCx));
+    hoverRy = Math.max(0.05, Math.abs(ey - hoverCy));
+  }
+
+  function updateHover() {
+    if (!pointerInside) { hovered = false; return; }
+    const dx = (mouse.x - hoverCx) / hoverRx, dy = (mouse.y - hoverCy) / hoverRy;
+    hovered = (dx * dx + dy * dy) <= 1;                            // inside projected disc
+  }
+
+  // Scratch objects for the cursor-dent projection (avoid per-frame allocation)
+  const _v = new THREE.Vector3();
+  const _mv = new THREE.Matrix4();
+  const _mvp = new THREE.Matrix4();
+  const _camInv = new THREE.Matrix4();
 
   function basePositions(n) {
     if (modelPos && modelPos.length === n * 3) return modelPos.slice();
@@ -274,17 +310,21 @@ export function createParticleStudio(container, userConfig = {}) {
     normArr = new Float32Array(n * 3);
     dentArr = new Float32Array(n);
 
+    let maxLen = 0;
     for (let i = 0; i < n; i++) {
       const col = pickColor(stops);
       colors[i*3] = col.r; colors[i*3+1] = col.g; colors[i*3+2] = col.b;
       const x = homePos[i*3], y = homePos[i*3+1], z = homePos[i*3+2];
       const len = Math.hypot(x, y, z) || 1;
+      if (len > maxLen) maxLen = len;
       dirArr[i*3] = x/len; dirArr[i*3+1] = y/len; dirArr[i*3+2] = z/len;
       normArr[i*3] = x/len; normArr[i*3+1] = y/len; normArr[i*3+2] = z/len;
       sizes[i] = cfg.size * (0.5 + Math.random() * 0.8);
       seeds[i] = Math.random() * Math.PI * 2;
       dentArr[i] = (Math.random() * 2 - 1);
     }
+    boundR = maxLen;
+    computeHoverEllipse();
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(curPos, 3).setUsage(THREE.DynamicDrawUsage));
@@ -310,14 +350,45 @@ export function createParticleStudio(container, userConfig = {}) {
     const n = curPos.length / 3;
     const posAttr = points.geometry.getAttribute('position');
 
-    if (cfg.animation === 'explode_on_hover') {
+    // Hover-triggered radial displacement (Supernova burst / Bulge swell).
+    const a = cfg.animation;
+    if (a === 'explode_on_hover' || a === 'dent_out_on_hover') {
       const k = Math.min(1, Math.max(0.01, cfg.acceleration));
       explodeT += ((hovered ? 1 : 0) - explodeT) * k;
-      const e = ease(explodeT) * cfg.explosionRadius;
+      const e = ease(explodeT);
+      const scatter = a === 'explode_on_hover';            // big outward burst with variance
+      const base = (scatter ? cfg.explosionRadius : 0.45) * cfg.hoverIntensity;  // Bulge = gentle swell
       for (let i = 0; i < n; i++) {
-        curPos[i*3]   = homePos[i*3]   + dirArr[i*3]   * e;
-        curPos[i*3+1] = homePos[i*3+1] + dirArr[i*3+1] * e;
-        curPos[i*3+2] = homePos[i*3+2] + dirArr[i*3+2] * e;
+        const variance = scatter ? (0.6 + Math.abs(dentArr[i]) * 0.8) : 1;
+        const d = base * e * variance;
+        curPos[i*3]   = homePos[i*3]   + normArr[i*3]   * d;
+        curPos[i*3+1] = homePos[i*3+1] + normArr[i*3+1] * d;
+        curPos[i*3+2] = homePos[i*3+2] + normArr[i*3+2] * d;
+      }
+      posAttr.needsUpdate = true;
+    } else if (a === 'dent_at_cursor') {
+      // Dimple: particles under the cursor cave inward, relax back on leave.
+      // Select by screen-space distance so the dent tracks the cursor as the cloud spins.
+      const k = Math.min(1, Math.max(0.04, cfg.acceleration * 2));
+      const depth = 0.6 * cfg.hoverIntensity, radius = 0.28, radius2 = radius * radius;
+      const mx = mouse.x, my = -mouse.y;                   // NDC (flip y)
+      points.updateMatrixWorld();
+      _mv.multiplyMatrices(_camInv.copy(camera.matrixWorld).invert(), points.matrixWorld);
+      _mvp.multiplyMatrices(camera.projectionMatrix, _mv);
+      for (let i = 0; i < n; i++) {
+        let t0 = homePos[i*3], t1 = homePos[i*3+1], t2 = homePos[i*3+2];
+        if (hovered) {
+          _v.set(t0, t1, t2).applyMatrix4(_mvp);            // -> NDC (perspective divide)
+          const dx = _v.x - mx, dy = _v.y - my, d2 = dx*dx + dy*dy;
+          if (d2 < radius2 && _v.z < 1) {                   // inside cursor disc & in front
+            const f = 1 - Math.sqrt(d2) / radius;           // 1 at center -> 0 at edge
+            const dep = depth * f * f * (3 - 2 * f);
+            t0 -= normArr[i*3] * dep; t1 -= normArr[i*3+1] * dep; t2 -= normArr[i*3+2] * dep;
+          }
+        }
+        curPos[i*3]   += (t0 - curPos[i*3])   * k;          // smooth carve / relax
+        curPos[i*3+1] += (t1 - curPos[i*3+1]) * k;
+        curPos[i*3+2] += (t2 - curPos[i*3+2]) * k;
       }
       posAttr.needsUpdate = true;
     } else if (cfg.animation === 'shape_shifter' && shapesPos.length > 1) {
@@ -360,8 +431,15 @@ export function createParticleStudio(container, userConfig = {}) {
       const p = cfg.parallaxStrength;
       targetRot.x += (mouse.y * 0.25 * p - targetRot.x) * 0.05;
       targetRot.y += (mouse.x * 0.4 * p - targetRot.y) * 0.05;
-      points.rotation.x = targetRot.x;
-      points.rotation.y = targetRot.y + (cfg.autoRotate ? t * 0.04 : 0);
+      if (!dragging) {
+        // momentum spin decays after release, drag rotation persists
+        dragRot.x += dragVel.x;
+        dragRot.y += dragVel.y;
+        dragVel.x *= 0.94;
+        dragVel.y *= 0.94;
+      }
+      points.rotation.x = targetRot.x + dragRot.x;
+      points.rotation.y = targetRot.y + dragRot.y + (cfg.autoRotate ? t * 0.04 : 0);
     }
     renderer.render(scene, camera);
   }
@@ -371,13 +449,41 @@ export function createParticleStudio(container, userConfig = {}) {
     const r = renderer.domElement.getBoundingClientRect();
     mouse.x = ((e.clientX - r.left) / r.width) * 2 - 1;
     mouse.y = ((e.clientY - r.top) / r.height) * 2 - 1;
+    pointerInside = true;
+    updateHover();          // hovered = cursor over the cloud disc, not just the canvas
+    if (!dragging) el.style.cursor = hovered ? 'grab' : '';
+    if (dragging) {
+      const dx = e.clientX - lastPX, dy = e.clientY - lastPY;
+      lastPX = e.clientX; lastPY = e.clientY;
+      const spin = 0.005;
+      dragRot.y += dx * spin;
+      dragRot.x += dy * spin;
+      dragVel.x = dy * spin;
+      dragVel.y = dx * spin;
+    }
   }
-  function onEnter() { hovered = true; }
-  function onLeave() { hovered = false; }
+  function onEnter() { pointerInside = true; updateHover(); }
+  function onLeave() { pointerInside = false; hovered = false; }
+  function onDown(e) {
+    if (!hovered) return;
+    dragging = true;
+    dragVel.set(0, 0);
+    lastPX = e.clientX; lastPY = e.clientY;
+    el.style.cursor = 'grabbing';
+    el.setPointerCapture?.(e.pointerId);
+  }
+  function onUp(e) {
+    if (!dragging) return;
+    dragging = false;
+    el.style.cursor = hovered ? 'grab' : '';
+    el.releasePointerCapture?.(e.pointerId);
+  }
   const el = renderer.domElement;
   el.addEventListener('pointermove', onMove);
   el.addEventListener('pointerenter', onEnter);
   el.addEventListener('pointerleave', onLeave);
+  el.addEventListener('pointerdown', onDown);
+  el.addEventListener('pointerup', onUp);
   const ro = new ResizeObserver(resize);
   ro.observe(container);
   addEventListener('resize', resize);
@@ -456,6 +562,8 @@ export function createParticleStudio(container, userConfig = {}) {
     el.removeEventListener('pointermove', onMove);
     el.removeEventListener('pointerenter', onEnter);
     el.removeEventListener('pointerleave', onLeave);
+    el.removeEventListener('pointerdown', onDown);
+    el.removeEventListener('pointerup', onUp);
     if (points) { scene.remove(points); points.geometry.dispose(); points.material.dispose(); }
     renderer.dispose();
     if (el.parentNode) el.parentNode.removeChild(el);

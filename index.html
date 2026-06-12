@@ -43,9 +43,17 @@
     <label>Color mix</label>
     <div class="swatches" id="swatches"></div>
   </div>
+  <div class="row">
+    <label>Hover effect</label>
+    <div class="fx-group" id="fxGroup"></div>
+  </div>
+  <div class="row" id="intensityRow" hidden>
+    <label>Intensity <span id="intensityVal">1.0</span></label>
+    <input type="range" id="intensitySlider" min="0.1" max="4" step="0.1" value="1">
+  </div>
   <button class="pbtn" id="downloadBtn">
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 11 5 5 5-5"/><path d="M5 21h14"/></svg>
-    Download particles .glb
+    Download .glb
   </button>
   <button class="pbtn" id="embedBtn">
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg>

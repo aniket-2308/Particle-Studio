@@ -37,6 +37,17 @@ function accentStops() {
 }
 function applyAccent() { studio?.setConfig({ accent: accentStops() }); }
 
+// ---- Hover effects (engine animation keys) ----
+const FX = [
+  { key: 'idle',               label: 'None' },
+  { key: 'explode_on_hover',   label: 'Supernova' },
+  { key: 'dent_out_on_hover',  label: 'Bulge' },
+  { key: 'dent_at_cursor',     label: 'Dimple' },
+];
+const FX_KEYS = FX.map(f => f.key);
+let hoverFx = 'idle';
+let hoverIntensity = 1.0;
+
 // ---- DOM ----
 const stage = document.getElementById('stage');
 const dropzone = document.getElementById('dropzone');
@@ -78,7 +89,8 @@ function currentConfig() {
     densBias: parseFloat(densSlider.value),
     parallaxStrength: parseFloat(paraSlider.value),
     accent: accentStops(),
-    animation: 'idle',
+    animation: hoverFx,
+    hoverIntensity,
     autoRotate: true,
   };
 }
@@ -93,6 +105,8 @@ function saveSettings() {
       densBias: parseFloat(densSlider.value),
       parallax: parseFloat(paraSlider.value),
       palette: palette.slice(),
+      hoverFx,
+      hoverIntensity,
     }));
   } catch (e) { /* private mode / quota — non-fatal */ }
 }
@@ -124,6 +138,11 @@ function loadSettings() {
     const hex = HEX_RE.test(s.accent) ? s.accent : ACCENT_ALIASES[s.accent];
     if (hex) palette = [hex];
   }
+
+  if (FX_KEYS.includes(s.hoverFx)) hoverFx = s.hoverFx;
+  if (Number.isFinite(s.hoverIntensity)) hoverIntensity = s.hoverIntensity;
+  intensitySlider.value = hoverIntensity;
+  intensityVal.textContent = hoverIntensity.toFixed(1);
 }
 
 function resetSettings() {
@@ -134,12 +153,17 @@ function resetSettings() {
   paraSlider.value = DEFAULT_SETTINGS.parallax;
   syncLabels();
   palette = DEFAULT_PALETTE.slice();
+  hoverFx = 'idle';
+  hoverIntensity = 1.0;
+  intensitySlider.value = hoverIntensity;
+  intensityVal.textContent = hoverIntensity.toFixed(1);
   closeColorPop();
   renderPalette();
+  renderFx();
   studio?.setConfig({
     particleCount: DEFAULT_SETTINGS.particleCount, size: DEFAULT_SETTINGS.size,
     densBias: DEFAULT_SETTINGS.densBias, parallaxStrength: DEFAULT_SETTINGS.parallax,
-    accent: accentStops(),
+    accent: accentStops(), animation: hoverFx, hoverIntensity,
   });
   saveSettings();
   setStatus('Settings reset to defaults');
@@ -276,8 +300,39 @@ addEventListener('pointerdown', e => {
   if (colorPop.classList.contains('visible') && !colorPop.contains(e.target) && !e.target.closest('.swatch')) closeColorPop();
 });
 
-loadSettings();      // restore sliders + palette before first paint
+// ---- Hover-effect picker + intensity ----
+const fxGroup = document.getElementById('fxGroup');
+const intensityRow = document.getElementById('intensityRow');
+const intensitySlider = document.getElementById('intensitySlider');
+const intensityVal = document.getElementById('intensityVal');
+
+function renderFx() {
+  fxGroup.innerHTML = '';
+  FX.forEach(fx => {
+    const b = document.createElement('button');
+    b.className = 'fx-btn' + (fx.key === hoverFx ? ' active' : '');
+    b.textContent = fx.label;
+    b.onclick = () => {
+      hoverFx = fx.key;
+      renderFx();
+      studio?.setConfig({ animation: hoverFx });
+      saveSettings();
+    };
+    fxGroup.appendChild(b);
+  });
+  intensityRow.hidden = hoverFx === 'idle';   // intensity only relevant for an active effect
+}
+
+intensitySlider.oninput = () => {
+  hoverIntensity = parseFloat(intensitySlider.value);
+  intensityVal.textContent = hoverIntensity.toFixed(1);
+  studio?.setConfig({ hoverIntensity });
+  saveSettings();
+};
+
+loadSettings();      // restore sliders + palette + hover fx before first paint
 renderPalette();
+renderFx();
 
 // ---- Particle export (Download particles .glb) ----
 // Current resting point cloud -> binary glTF (POINTS primitive, vertex colors)
@@ -323,7 +378,7 @@ document.getElementById('embedBtn').addEventListener('click', async () => {
       densBias: parseFloat(densSlider.value),
       parallaxStrength: parseFloat(paraSlider.value),
       accent: palette.slice(),          // hex array -> engine mixes equally
-      animation: 'idle', autoRotate: true,
+      animation: hoverFx, hoverIntensity, autoRotate: true,
     };
     const id = shortId();
     const { error } = await supabase.from('scenes').insert({
@@ -385,7 +440,7 @@ async function saveToLibrary(file) {
     const id = crypto.randomUUID();
     const filePath = `files/${id}-${file.name.replace(/[^\w.\-]+/g, '_')}`;
     const { error: upErr } = await supabase.storage.from('models')
-      .upload(filePath, file, { contentType: mimeForName(file.name) });
+      .upload(filePath, file, { contentType: mimeForName(file.name), cacheControl: '31536000' });
     if (upErr) throw upErr;
 
     // let the spin settle into a representative frame before snapshotting
@@ -396,7 +451,7 @@ async function saveToLibrary(file) {
       if (blob) {
         thumbPath = `thumbs/${id}.jpg`;
         const { error: tErr } = await supabase.storage.from('models')
-          .upload(thumbPath, blob, { contentType: 'image/jpeg' });
+          .upload(thumbPath, blob, { contentType: 'image/jpeg', cacheControl: '31536000' });
         if (tErr) thumbPath = null;
       }
     }
