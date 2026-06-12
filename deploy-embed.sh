@@ -15,11 +15,16 @@ upload() {
   curl -sS -X DELETE \
     "$SUPABASE_URL/storage/v1/object/models/$dest" \
     -H "Authorization: Bearer $KEY" -H "apikey: $KEY" >/dev/null
+  # Runtime lives at a FIXED path and is overwritten on redeploy, so it must NOT
+  # be immutable — a short cache absorbs traffic bursts but still picks up fixes.
+  # (Model .glb files are uploaded by app.js to unique UUID paths with a 1-year
+  #  immutable cache, which is safe because each URL maps to fixed bytes forever.)
   curl -sS -X POST \
     "$SUPABASE_URL/storage/v1/object/models/$dest" \
     -H "Authorization: Bearer $KEY" \
     -H "apikey: $KEY" \
     -H "Content-Type: $ctype" \
+    -H "cache-control: max-age=600" \
     --data-binary "@$src"
   echo
 }
