@@ -13,7 +13,10 @@
   <p class="eyebrow">Particle Studio</p>
   <h1 class="dz-headline">Drop your 3D Model.<br>Watch it become a constellation.</h1>
   <p class="dz-body">Drag a <strong>.glb</strong> or <strong>.gltf</strong> model anywhere on this canvas. It'll be sampled into ~9,000 particles in the Particle Studio, reactive to your cursor.</p>
-  <button class="dz-pill" id="browseBtn">Choose file</button>
+  <div class="dz-actions">
+    <button class="dz-pill" id="browseBtn">Upload file</button>
+    <button class="dz-pill dz-pill-ghost" id="earthBtn">Start with a sphere</button>
+  </div>
   <input type="file" id="fileInput" accept=".glb,.gltf">
   <div id="dzHistoryWrap" hidden>
     <p class="dz-recent">Or pick up where you left off</p>

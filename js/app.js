@@ -26,6 +26,8 @@ function shortId(len = 8) {
 
 // ---- Color mix: the cloud blends ALL swatches at equal weight ----
 const DEFAULT_PALETTE = ['#00e5ff'];   // start with one cyan
+// Ocean / land / cloud mix for the "Start with Earth" procedural starter.
+const EARTH_PALETTE = ['#1f6fb2', '#3a8f57', '#6f8f3a', '#ffffff'];
 let palette = DEFAULT_PALETTE.slice();
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 const ACCENT_ALIASES = { plum: '#8052ff', amber: '#ffb829', electric_blue: '#2f6bff', lichen: '#15846e', bone: '#ffffff' };
@@ -196,6 +198,37 @@ async function loadFile(file) {
     showToast("Couldn't open that file — try a different one.");
   }
 }
+
+// Bundled "Earth" starter — lets anyone try the studio with no .glb of their
+// own. Samples the bundled Earth model, tinted ocean/land/cloud.
+const EARTH_MODEL_URL = 'assets/Earth_1_12756.glb';
+async function startWithEarth() {
+  const hadStudio = !!studio;
+  palette = EARTH_PALETTE.slice();
+  renderPalette();
+  loadedFile = null;
+  currentModel = null;   // bundled asset, nothing to embed-link
+  countSlider.value = Math.max(parseInt(countSlider.value, 10), 9000);
+  syncLabels();
+  saveSettings();
+  setStatus('Sampling…');
+  try {
+    if (!studio) studio = createParticleStudio(stage, currentConfig());
+    else studio.setConfig(currentConfig());
+    await studio.loadModelFromURL(EARTH_MODEL_URL);
+    dropzone.classList.add('hidden');
+    panel.classList.add('visible');
+    reloadPill.classList.add('visible');
+    hideToast();
+    setStatus(`Loaded · ${studio.getPointCount().toLocaleString()} particles · drag cursor to parallax`);
+  } catch (err) {
+    console.error('[particle-studio] earth load failed:', err);
+    if (!hadStudio && studio) { studio.dispose(); studio = null; }
+    setStatus('');
+    showToast("Couldn't load the Earth model.");
+  }
+}
+document.getElementById('earthBtn').addEventListener('click', startWithEarth);
 
 ['dragenter','dragover'].forEach(ev => addEventListener(ev, e => {
   e.preventDefault(); dropzone.classList.add('dragging');
