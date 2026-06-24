@@ -196,7 +196,9 @@ async function startWithEarth() {
   palette = EARTH_PALETTE.slice();
   renderPalette();
   loadedFile = null;
-  currentModel = null;   // bundled asset, nothing to embed-link
+  // Bundled asset is served publicly from this origin, so an embed scene can load
+  // it by absolute URL — let the starter cloud be embed-linkable too.
+  currentModel = { id: null, url: new URL(EARTH_MODEL_URL, location.href).href };
   countSlider.value = Math.max(parseInt(countSlider.value, 10), 9000);
   syncLabels();
   saveSettings();
