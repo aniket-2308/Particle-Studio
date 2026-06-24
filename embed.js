@@ -2,15 +2,12 @@
  *
  *   <script src="…/embed.js?preset=explode_on_hover&accent=electric_blue&density=0.8"></script>
  *   <script src="…/embed.js?config=…/my_preset.json"></script>
- *   <script src="…/embed.js?s=AbC12345"></script>   (saved Supabase scene)
+ *   <script src="…/embed.js?s=AbC12345"></script>   (saved scene, via /api/scene)
  *
  * Classic script: parses its own URL params, injects the three.js import map
  * (once), then boots the engine as a module. One container is created per tag.
  */
 (function () {
-  var SUPABASE_URL = 'https://REDACTED_PROJECT_REF.supabase.co';
-  var SUPABASE_KEY = 'REDACTED_SUPABASE_KEY';
-
   var me = document.currentScript;
   if (!me) return;
   var src = new URL(me.src, location.href);
@@ -70,9 +67,7 @@
     configUrl: params.get('config'),
     overrides: paramConfig(),
     model: params.get('model'),
-    base: base,
-    supaUrl: SUPABASE_URL,
-    supaKey: SUPABASE_KEY
+    base: base
   });
 
   // 4. Boot the engine once; it drains the queue.
@@ -88,15 +83,11 @@
       "    let cfg = {}, model = null;\n" +
       "    try {\n" +
       "      if (j.scene) {\n" +
-      "        const r = await fetch(j.supaUrl + '/rest/v1/rpc/get_scene', {\n" +
-      "          method: 'POST',\n" +
-      "          headers: { apikey: j.supaKey, Authorization: 'Bearer ' + j.supaKey, 'Content-Type': 'application/json' },\n" +
-      "          body: JSON.stringify({ p_id: j.scene }) });\n" +
-      "        const rows = await r.json();\n" +
-      "        const row = Array.isArray(rows) ? rows[0] : null;\n" +
-      "        if (!row) throw new Error('scene not found: ' + j.scene);\n" +
+      "        const r = await fetch(j.base + 'api/scene?id=' + encodeURIComponent(j.scene));\n" +
+      "        if (!r.ok) throw new Error('scene not found: ' + j.scene);\n" +
+      "        const row = await r.json();\n" +
       "        cfg = row.config || {};\n" +
-      "        if (row.file_path) model = j.supaUrl + '/storage/v1/object/public/models/' + row.file_path;\n" +
+      "        if (row.model_url) model = row.model_url;\n" +
       "      } else if (j.configUrl) cfg = await (await fetch(j.configUrl)).json();\n" +
       "      else if (j.preset) {\n" +
       "        const all = await (await fetch(j.base + 'config.json')).json();\n" +

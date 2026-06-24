@@ -1,2 +1,6 @@
 /CLAUDE.md
 /test
+/node_modules
+.vercel
+.env*.local
+.env*

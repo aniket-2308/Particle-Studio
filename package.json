@@ -1,0 +1,10 @@
+{
+  "name": "particle-studio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Particle Studio — browser particle toy + embeddable component factory. Vercel backend (Blob + KV).",
+  "dependencies": {
+    "@vercel/blob": "^2.4.1"
+  }
+}

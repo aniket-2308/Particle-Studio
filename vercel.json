@@ -1,0 +1,13 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "headers": [
+    {
+      "source": "/(embed.js|config.json)",
+      "headers": [{ "key": "cache-control", "value": "public, max-age=600" }]
+    },
+    {
+      "source": "/js/engine.js",
+      "headers": [{ "key": "cache-control", "value": "public, max-age=600" }]
+    }
+  ]
+}

@@ -1,28 +1,17 @@
-// Studio UI — wires the controls panel, drag/drop, export and Supabase library
+// Studio UI — wires the controls panel, drag/drop, export and the Vercel library
 // to the shared particle engine (js/engine.js). Rendering/sampling/animation
 // all live in the engine now; this file is glue + persistence.
 
 import { createParticleStudio, THREE } from './engine.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
-import { createClient } from '@supabase/supabase-js';
+import { upload } from '@vercel/blob/client';
 
-// ---- Backend (Supabase): model files in public storage (for embeds); the
-//      Library list itself is LOCAL to this browser, never shared — see below. ----
-const SUPABASE_URL = 'https://REDACTED_PROJECT_REF.supabase.co';
-const SUPABASE_KEY = 'REDACTED_SUPABASE_KEY';
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+// ---- Backend (Vercel): model files in Vercel Blob (public, for embeds), scenes
+//      in Vercel KV via /api/scene; the Library LIST is LOCAL to this browser,
+//      never shared — see below. ----
 
-// Hosted embed loader (uploaded into the public `models` bucket under embed/)
-const EMBED_LOADER = `${SUPABASE_URL}/storage/v1/object/public/models/embed/embed.js`;
-
-// Short, URL-safe id (no ambiguous chars) for scene links
-function shortId(len = 8) {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
-  const bytes = crypto.getRandomValues(new Uint8Array(len));
-  let s = '';
-  for (let i = 0; i < len; i++) s += chars[bytes[i] % chars.length];
-  return s;
-}
+// Hosted embed loader — served as a static file from this site's own origin.
+const EMBED_LOADER = `${location.origin}/embed.js`;
 
 // ---- Color mix: the cloud blends ALL swatches at equal weight ----
 const DEFAULT_PALETTE = ['#00e5ff'];   // start with one cyan
@@ -85,7 +74,7 @@ const DEFAULT_SETTINGS = { particleCount: 9000, size: 1.0, densBias: 0.6, parall
 
 let studio = null;        // engine instance, created lazily on first load
 let loadedFile = null;
-let currentModel = null;  // { id, file_path } of the loaded model, for scene links
+let currentModel = null;  // { id, url } of the loaded model (Blob URL), for scene links
 
 function currentConfig() {
   return {
@@ -403,7 +392,7 @@ document.getElementById('downloadBtn').addEventListener('click', async () => {
   }
 });
 
-// ---- Copy embed link: save current model + tuning as a Supabase scene ----
+// ---- Copy embed link: save current model + tuning as a scene in Vercel KV ----
 document.getElementById('embedBtn').addEventListener('click', async () => {
   if (!studio || !currentModel) { setStatus('Load a model first'); return; }
   try {
@@ -416,12 +405,13 @@ document.getElementById('embedBtn').addEventListener('click', async () => {
       accent: palette.slice(),          // hex array -> engine mixes equally
       animation: hoverFx, hoverIntensity, autoRotate: true,
     };
-    const id = shortId();
-    const { error } = await supabase.from('scenes').insert({
-      id, model_id: null, file_path: currentModel.file_path,
-      name: loadedFile?.name || null, config,
+    const r = await fetch('/api/scene', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config, model_url: currentModel.url, name: loadedFile?.name || null }),
     });
-    if (error) throw error;
+    if (!r.ok) throw new Error('scene create failed: ' + r.status);
+    const { id } = await r.json();
     const link = `<script src="${EMBED_LOADER}?s=${id}"><\/script>`;
     await navigator.clipboard.writeText(link);
     setStatus('Embed link copied · paste into any page');
@@ -483,26 +473,24 @@ function fmtAge(iso) {
 function escapeHtml(s) {
   return s.replace(/[<>&"']/g, ch => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[ch]));
 }
-function publicUrl(path) {
-  return supabase.storage.from('models').getPublicUrl(path).data.publicUrl;
-}
-
 async function saveToLibrary(file) {
   try {
     setStatus('Loaded · saving to library…');
     // Dedup against THIS browser's local library (name + size).
     const rows = loadLibrary();
     const dup = rows.find(r => r.name === file.name && r.size_bytes === file.size);
-    if (dup) {
-      currentModel = { id: dup.id, file_path: dup.file_path };
+    if (dup && dup.url) {
+      currentModel = { id: dup.id, url: dup.url };
       setStatus('Loaded · already in library'); return;
     }
 
     const id = crypto.randomUUID();
-    const filePath = `files/${id}-${file.name.replace(/[^\w.\-]+/g, '_')}`;
-    const { error: upErr } = await supabase.storage.from('models')
-      .upload(filePath, file, { contentType: mimeForName(file.name), cacheControl: '31536000' });
-    if (upErr) throw upErr;
+    const blobPath = `files/${id}-${file.name.replace(/[^\w.\-]+/g, '_')}`;
+    // Client upload straight to Vercel Blob (bypasses the 4.5 MB serverless body
+    // limit); /api/upload mints the token. Returns the public, immutable Blob URL.
+    const { url } = await upload(blobPath, file, {
+      access: 'public', contentType: mimeForName(file.name), handleUploadUrl: '/api/upload',
+    });
 
     // let the spin settle into a representative frame, then keep the thumb LOCAL
     await new Promise(r => setTimeout(r, 600));
@@ -512,11 +500,11 @@ async function saveToLibrary(file) {
       if (blob) thumb = await blobToThumbDataURL(blob);
     }
 
-    rows.unshift({ id, name: file.name, file_path: filePath, thumb, size_bytes: file.size,
+    rows.unshift({ id, name: file.name, url, thumb, size_bytes: file.size,
                    created_at: new Date().toISOString() });
     saveLibrary(rows);
 
-    currentModel = { id, file_path: filePath };
+    currentModel = { id, url };
     setStatus('Loaded · saved to library');
     refreshHistory();
   } catch (err) {
@@ -528,10 +516,10 @@ async function saveToLibrary(file) {
 async function openFromLibrary(row) {
   setStatus('Fetching from library…');
   try {
-    const res = await fetch(publicUrl(row.file_path));
+    const res = await fetch(row.url);
     if (!res.ok) throw new Error('storage fetch ' + res.status);
     const blob = await res.blob();
-    currentModel = { id: row.id, file_path: row.file_path };
+    currentModel = { id: row.id, url: row.url };
     historyPanel.classList.remove('visible');
     loadFile(new File([blob], row.name, { type: mimeForName(row.name) }));
   } catch (err) {
