@@ -221,13 +221,27 @@ async function startWithEarth() {
 }
 document.getElementById('earthBtn').addEventListener('click', startWithEarth);
 
-['dragenter','dragover'].forEach(ev => addEventListener(ev, e => {
-  e.preventDefault(); dropzone.classList.add('dragging');
-}));
-['dragleave','drop'].forEach(ev => addEventListener(ev, e => {
-  e.preventDefault(); dropzone.classList.remove('dragging');
-}));
-addEventListener('drop', e => loadFile(e.dataTransfer.files[0]));
+// Full-page drag overlay. A drag counter avoids the flicker you'd get from
+// dragleave firing every time the cursor crosses a child element.
+const dropOverlay = document.getElementById('dropOverlay');
+let dragDepth = 0;
+const isFileDrag = e => Array.from(e.dataTransfer?.types || []).includes('Files');
+
+addEventListener('dragenter', e => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault(); dragDepth++; dropOverlay.classList.add('active');
+});
+addEventListener('dragover', e => { if (isFileDrag(e)) e.preventDefault(); });
+addEventListener('dragleave', e => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  if (--dragDepth <= 0) { dragDepth = 0; dropOverlay.classList.remove('active'); }
+});
+addEventListener('drop', e => {
+  e.preventDefault(); dragDepth = 0; dropOverlay.classList.remove('active');
+  const file = e.dataTransfer?.files?.[0];
+  if (file) loadFile(file);
+});
 document.getElementById('browseBtn').addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', e => loadFile(e.target.files[0]));
 reloadPill.addEventListener('click', () => {
