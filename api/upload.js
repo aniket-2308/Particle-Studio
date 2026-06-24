@@ -8,9 +8,11 @@
 // Blob paths get a random suffix => unique forever => safe to cache immutably (1 yr),
 // matching the old Supabase per-UUID immutable caching.
 import { handleUpload } from '@vercel/blob/client';
+import { rateLimit } from './_guard.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'method not allowed' });
+  if (!rateLimit(req, { limit: 20 })) return res.status(429).json({ error: 'rate limited' });
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
     const json = await handleUpload({

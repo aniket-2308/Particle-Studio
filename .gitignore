@@ -1,6 +1,21 @@
+# dependencies
+/node_modules
+
+# local env / secrets — NEVER commit
+.env
+.env.*
+.env*.local
+*.local
+
+# vercel
+.vercel
+
+# local-only docs / scratch
 /CLAUDE.md
 /test
-/node_modules
-.vercel
-.env*.local
-.env*
+
+# os / editor
+.DS_Store
+*.log
+.idea
+.vscode

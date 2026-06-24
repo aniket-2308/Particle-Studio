@@ -8,6 +8,7 @@
 //   - create is write-only (POST)      — the client never lists existing scenes
 //   - the 8-char base62 id is the unguessable capability.
 import { put, list } from '@vercel/blob';
+import { rateLimit, isAllowedModelUrl, configTooBig } from './_guard.js';
 
 // 8-char base62 id, no ambiguous chars — same charset the studio used for scene ids.
 function shortId(len = 8) {
@@ -37,11 +38,15 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'POST') {
+      if (!rateLimit(req, { limit: 20 })) return res.status(429).json({ error: 'rate limited' });
       const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
       const { config, model_url, name } = body;
       if (!config || !model_url) return res.status(400).json({ error: 'config and model_url required' });
+      if (!isAllowedModelUrl(model_url)) return res.status(400).json({ error: 'invalid model_url' });
+      if (configTooBig(config)) return res.status(413).json({ error: 'config too large' });
+      const safeName = typeof name === 'string' ? name.slice(0, 200) : null;
       const id = shortId();
-      const row = { config, model_url, name: name || null, created_at: Date.now() };
+      const row = { config, model_url, name: safeName, created_at: Date.now() };
       await put(`scenes/${id}.json`, JSON.stringify(row), {
         access: 'public', addRandomSuffix: false, contentType: 'application/json',
         cacheControlMaxAge: 600,
